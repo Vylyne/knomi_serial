@@ -56,6 +56,7 @@ class PrinterState:
     chamber_target: float = 0
 
     mcu_temp: float = 0
+    mcu_target: float = 0
 
     progress: float = 0
 

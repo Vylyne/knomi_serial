@@ -259,7 +259,6 @@ class Knomi_Serial:
             mcu_sensor = self.printer.lookup_object(self.config_sensor_mcu, None)
             if mcu_sensor:
                 mcu_temp, mcu_target = mcu_sensor.get_temp(eventtime)
-        logging.warning(f"knomi_serial -> _send_update() -> MCU_sensor: {self.config_sensor_mcu}MCU Temp: {mcu_temp}, MCU Target: {mcu_target}")
 
         # Workaround for Danger Klipper.
         if hasattr(self.virtual_sdcard, "progress"):

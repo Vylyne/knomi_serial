@@ -58,6 +58,7 @@ namespace printer
         state->chamber_temp = ntohl(state->chamber_temp);
         state->chamber_target = ntohl(state->chamber_target);
         state->mcu_temp = ntohl(state->mcu_temp);
+        state->mcu_target = ntohl(state->mcu_target);
         state->progress = ntohl(state->progress);
         state->tram_type = (printer::TramType) ntohl((uint32_t) state->tram_type); });
         }

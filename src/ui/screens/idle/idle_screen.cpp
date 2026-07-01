@@ -41,7 +41,7 @@ namespace ui
       IDLE_PAGE_0::printer_update(state);
       IDLE_PAGE_1::printer_update(state);
       IDLE_PAGE_2::printer_update(state);
-#if !defined(TOOLCHANGER) or defined(TOOLCHANGER) and TOOLCHANGER == 0
+#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
       IDLE_PAGE_3::printer_update(state);
       IDLE_PAGE_4::printer_update(state);
 #endif

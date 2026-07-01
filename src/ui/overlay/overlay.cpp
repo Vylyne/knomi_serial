@@ -17,7 +17,11 @@ namespace ui
 
     void _printer_update_handler(const printer::State &state);
 
+    // Blocking Stop Button in Toolchanger Mode
+#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
     void _stop_click_handler(lv_event_t *e);
+#endif
+
     void _right_click_handler(lv_event_t *e);
     void _left_click_handler(lv_event_t *e);
 
@@ -38,6 +42,8 @@ namespace ui
       lv_obj_remove_flag(_progress, LV_OBJ_FLAG_CLICKABLE);
       lv_obj_add_flag(_progress, LV_OBJ_FLAG_HIDDEN);
 
+      // Blocking Stop Button in Toolchanger Mode
+#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
       lv_obj_t *stop = lv_button_create(lv_layer_top());
       lv_obj_set_size(stop, RES_H, 35);
       lv_obj_align(stop, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -52,6 +58,7 @@ namespace ui
           _stop_click_handler,
           LV_EVENT_CLICKED,
           nullptr);
+#endif
 
       lv_obj_t *right = _init_arc(350, 10);
       lv_obj_add_event_cb(
@@ -131,10 +138,13 @@ namespace ui
       }
     }
 
+    // Blocking Stop Button in Toolchanger Mode
+#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
     void _stop_click_handler(lv_event_t *e)
     {
       printer::send::send_stop();
     }
+#endif
 
     void _right_click_handler(lv_event_t *e)
     {

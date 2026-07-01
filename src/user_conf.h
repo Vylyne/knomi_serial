@@ -21,7 +21,7 @@
 #define IDLE_PAGE_0 gcode_page
 #define IDLE_PAGE_1 temp_page
 #define IDLE_PAGE_2 filament_page
-#if !defined(TOOLCHANGER) or defined(TOOLCHANGER) and TOOLCHANGER == 0
+#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
 #define IDLE_PAGE_3 home_page
 #define IDLE_PAGE_4 move_page
 #endif

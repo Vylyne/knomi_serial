@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <USB.h>
 #include <Wire.h>
 
 #include "board_conf.h"
@@ -9,6 +10,22 @@
 #include "user_conf.h"
 
 void setup() {
+  USB.manufacturerName(USB_MANUFACTURER);
+  USB.productName(USB_PRODUCT);
+  // If it's standalone lets use the MAC address as serial.
+#ifndef DEV_ID
+  uint64_t mac = ESP.getEfuseMac();
+  char serial[13];
+  snprintf(serial, sizeof(serial), "%04X%08X",
+          (uint16_t)(mac >> 32),
+          (uint32_t)mac);
+  USB.serialNumber(serial);
+#else
+  // dev_id is provided lets use that.
+  USB.serialNumber(DEV_ID);
+#endif
+  USB.begin();
+
   Serial.begin(SERIAL_BAUD_RATE);
   Serial.setTimeout(SERIAL_TIMEOUT);
   Wire.begin(I2C0_SDA_PIN, I2C0_SCL_PIN, I2C0_SPEED);

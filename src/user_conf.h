@@ -1,8 +1,17 @@
 #ifndef USER_CONF_H
 #define USER_CONF_H
 
-// Define Toolchanger To block out unused features in LVGL.
-#define TOOLCHANGER 1 // change to 0 or undefine to restore global LVGL features.
+#undef USB_MANUFACTURER
+#undef USB_PRODUCT
+#define USB_MANUFACTURER "Knomi_Serial"
+
+#ifndef DEV_ID
+  #define USB_PRODUCT "standalone"
+  #undef TOOLCHANGER
+#else
+  #define USB_PRODUCT "toolchanger"
+  #define TOOLCHANGER 1
+#endif
 
 // Display options.
 #define PRINTER_NAME "Knomi_Serial"

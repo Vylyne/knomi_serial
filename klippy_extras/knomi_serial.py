@@ -97,13 +97,8 @@ class Knomi_Serial:
                 "Only one of heater_chamber and sensor_chamber can be specified",
             )
 
-        sensor_mcu = config.get("sensor_mcu", None)
-        if sensor_mcu and not (sensor_mcu.startswith("temperature_sensor") or sensor_mcu.startswith("temperature_fan")):
-            if self.printer.lookup_object(f"temperature_sensor {sensor_mcu}", None):
-                sensor_mcu = f"temperature_sensor {sensor_mcu}"
-            elif self.printer.lookup_object(f"temperature_fan {sensor_mcu}", None):
-                sensor_mcu = f"temperature_fan {sensor_mcu}"
-        self.config_sensor_mcu = sensor_mcu
+        self.config_sensor_mcu = config.get("sensor_mcu", None)
+        self.mcu_sensor = None 
 
         self.config_move = [
             config.getfloat("move_x", 10.0),
@@ -166,6 +161,14 @@ class Knomi_Serial:
             self._handle_read,
             self.reactor.NOW,
         )
+        if self.config_sensor_mcu:
+            self.mcu_sensor = (
+                    self.printer.lookup_object(f"temperature_sensor {self.config_sensor_mcu}", None)
+                    or self.printer.lookup_object(f"temperature_fan {self.config_sensor_mcu}", None)
+                    or self.printer.lookup_object(self.config_sensor_mcu, None)
+                )
+            if not self.mcu_sensor:
+                logging.warning(f"{self.name}: Could not find sensor_mcu '{self.config_sensor_mcu}'")
 
     def _handle_shutdown(self):
         self._send_shutdown_state()
@@ -252,12 +255,9 @@ class Knomi_Serial:
             )
             chamber_temp, _ = chamber_sensor.get_temp(eventtime)
             
-        mcu_temp = 0
-        mcu_target = 0
-        if self.config_sensor_mcu:
-            mcu_sensor = self.printer.lookup_object(self.config_sensor_mcu, None)
-            if mcu_sensor:
-                mcu_temp, mcu_target = mcu_sensor.get_temp(eventtime)
+        mcu_temp, mcu_target = 0, 0
+        if self.mcu_sensor:
+            mcu_temp, mcu_target = self.mcu_sensor.get_temp(eventtime)
 
         # Workaround for Danger Klipper.
         if hasattr(self.virtual_sdcard, "progress"):

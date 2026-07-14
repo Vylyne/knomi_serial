@@ -19,8 +19,12 @@ namespace ui
     display::init();
     display::set_backlight(DISPLAY_BRIGHTNESS);
 
+    static int32_t _last_hotend_temp = 0;
+    static printer::Status _last_status = printer::Status::kDisconnected;
+
     uint32_t last_active = millis();
     bool sleeping = false;
+    bool dimmed = false;
 
     while (true)
     {
@@ -29,25 +33,49 @@ namespace ui
       if (display::cst816s::consume_touched())
       {
         last_active = millis();
-        if (sleeping)
+        if (sleeping || dimmed)
         {
           display::set_backlight(DISPLAY_BRIGHTNESS);
           sleeping = false;
+          dimmed = false;
         }
       }
 
-      if (!sleeping && (millis() - last_active > SLEEP_TIMEOUT_MS))
+      bool is_hot = _last_hotend_temp > SLEEP_HOT_THRESHOLD;
+      bool is_printing = _last_status == printer::Status::kPrinting;
+
+      // restore brightness if printer wakes up while dimmed
+      if (dimmed && (is_hot || is_printing))
       {
-        display::set_backlight(0);
-        sleeping = true;
+        display::set_backlight(DISPLAY_BRIGHTNESS);
+        dimmed = false;
+        last_active = millis();
+      }
+
+      if (!sleeping && !dimmed && !is_hot && !is_printing)
+      {
+        if (millis() - last_active > SLEEP_DIM_MS)
+        {
+          display::set_backlight(SLEEP_DIM_BRIGHTNESS);
+          dimmed = true;
+        }
+      }
+      if (!sleeping && !is_hot && !is_printing)
+      {
+        if (millis() - last_active > SLEEP_TIMEOUT_MS)
+        {
+          display::set_backlight(0);
+          sleeping = true;
+          dimmed = false;
+        }
       }
 
       printer::recv::try_read([](const printer::State &state)
-                              { ui::update(state); });
+                              {
+            _last_hotend_temp = state.hotend_temp;
+            _last_status = state.status;
+            ui::update(state); });
       delay(5);
     }
-
-    display::destroy();
   }
-
 }

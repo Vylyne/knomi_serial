@@ -26,7 +26,7 @@ namespace ui
       IDLE_PAGE_1::init(scr, state);
       IDLE_PAGE_2::init(scr, state);
 
-#if !defined(TOOLCHANGER) or defined(TOOLCHANGER) and TOOLCHANGER == 0
+#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
       IDLE_PAGE_3::init(scr, state);
       IDLE_PAGE_4::init(scr, state);
 #endif

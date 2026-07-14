@@ -5,7 +5,6 @@ import dataclasses
 import enum
 import serial
 import struct
-from typing import List
 
 _BAUD_RATE = 115200
 _HEADER = b"\x83\xad\x83\xad"

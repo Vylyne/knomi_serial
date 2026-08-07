@@ -9,7 +9,10 @@
 #define SLEEP_DIM_BRIGHTNESS 3
 #define SLEEP_DIM_MS 30000     // dim after 30s
 #define SLEEP_TIMEOUT_MS 60000 // off after 60s
-#define SLEEP_HOT_THRESHOLD 40 // degrees C
+// Safety net only - the host's `used` flag decides whether a screen sleeps.
+// Must sit above chamber temperature, or a tool idling at chamber heat reads as
+// busy and the screen never sleeps at all.
+#define SLEEP_HOT_THRESHOLD 80 // degrees C
 
 // How often to report firmware version and device state back to the host.
 #define REPORT_PERIOD_MS 2000

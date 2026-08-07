@@ -27,6 +27,7 @@ namespace ui
 
     static int32_t _last_hotend_temp = 0;
     static printer::Status _last_status = printer::Status::kDisconnected;
+    static bool _last_used = true;
 
     uint32_t last_active = millis();
     uint32_t last_report = 0;
@@ -48,18 +49,24 @@ namespace ui
         }
       }
 
+      // A job running on *this* tool is what keeps the screen up. The host says
+      // so explicitly - it is told which tools a job uses - because temperature
+      // cannot tell a docked tool still in the job from one that is simply warm
+      // from the chamber. Temperature stays on as a safety net: a hot nozzle
+      // should never sit behind a dark screen whatever the host believes.
       bool is_hot = _last_hotend_temp > SLEEP_HOT_THRESHOLD;
-      bool is_printing = _last_status == printer::Status::kPrinting;
+      bool in_job = _last_status == printer::Status::kPrinting && _last_used;
+      bool keep_awake = is_hot || in_job;
 
       // restore brightness if printer wakes up while dimmed
-      if (dimmed && (is_hot || is_printing))
+      if (dimmed && keep_awake)
       {
         display::set_backlight(DISPLAY_BRIGHTNESS);
         dimmed = false;
         last_active = millis();
       }
 
-      if (!sleeping && !dimmed && !is_hot && !is_printing)
+      if (!sleeping && !dimmed && !keep_awake)
       {
         if (millis() - last_active > SLEEP_DIM_MS)
         {
@@ -67,7 +74,7 @@ namespace ui
           dimmed = true;
         }
       }
-      if (!sleeping && !is_hot && !is_printing)
+      if (!sleeping && !keep_awake)
       {
         if (millis() - last_active > SLEEP_TIMEOUT_MS)
         {
@@ -81,6 +88,7 @@ namespace ui
                               {
             _last_hotend_temp = state.hotend_temp;
             _last_status = state.status;
+            _last_used = state.used;
             ui::update(state); });
 
       // Report our own state upstream. This repeats rather than announcing once

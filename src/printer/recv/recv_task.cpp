@@ -60,7 +60,13 @@ namespace printer
         state->mcu_temp = ntohl(state->mcu_temp);
         state->mcu_target = ntohl(state->mcu_target);
         state->progress = ntohl(state->progress);
-        state->tram_type = (printer::TramType) ntohl((uint32_t) state->tram_type); });
+        state->tool_number = ntohl(state->tool_number);
+        state->filament_color = ntohl(state->filament_color);
+        state->tram_type = (printer::TramType) ntohl((uint32_t) state->tram_type);
+        // Both strings are fixed-width fields the host zero-pads, but a
+        // truncated or malformed packet could still leave them unterminated.
+        state->filament_type[printer::kFilamentTypeMaxLen] = '\0';
+        state->gcodes[sizeof(state->gcodes) - 1] = '\0'; });
         }
         delay(5);
       }

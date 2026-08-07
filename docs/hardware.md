@@ -97,15 +97,47 @@ the cost of getting at the FPC, and of the 2.8 V pullup rail.
 
 ## For the four corner keys
 
-Two routes, and they differ in latency rather than capability:
+The keys need to reach two boards at once — the buffer already acts on feed and
+retract without Klipper's involvement, and that channel is worth keeping. A DPDT
+momentary switch does that with two galvanically separate poles and no active
+parts, which sidesteps the question of whether both inputs share a logic rail.
+Worth metering before wiring: plenty of 6-pin 7×7 tactiles are two poles that
+are internally common, which would tie the two boards' grounds together and
+defeat the point.
 
-- **Buffer board GPIO, as `[gcode_button]`.** No firmware work at all; Klipper
-  handles debounce and dispatch. But a press travels button → MCU → host → macro
-  → packet → screen, so the screen cannot react in under ~100–200 ms.
-- **An I²C expander on U6.** Needs polling and debounce in firmware, and shares
-  the touch bus. In exchange the screen can respond on the same frame while the
-  gcode still goes up through Klipper.
+For the Knomi's side of that switch, **direct GPIO through U10 beats an I²C
+expander** now that the FPC is broken out. Four pins, native interrupts,
+sub-millisecond, and nothing shared with the touch panel. An expander on U6
+remains a reasonable fallback purely on mechanical grounds — a crimped JST
+connector will not walk out of its latch the way a 0.5 mm ribbon can — but it
+polls, and its interrupt line has nowhere to land on a four-pin connector.
 
-The second only matters because of what the keys are meant to do: the fill
-leaning toward the key you pressed is feedback, and feedback that arrives 200 ms
-late stops reading as caused by you. Feedback local, authority central.
+Good pins for buttons, all plain GPIO with no strapping or boot meaning and
+usable internal pull-ups:
+
+| GPIO | FPC net |
+| --- | --- |
+| 5 | `D7` |
+| 6 | `D8` |
+| 8 | `D9` |
+| 9 | `HREF` |
+
+Avoid **GPIO10** for a pull-up button input. R55 ties it to ground through 100K,
+and against the S3's ~45K internal pull-up that divides to roughly 2.28 V —
+under the ~2.48 V V<sub>IH</sub>, so a released button would read as pressed. It
+is fine with an external pull-up of a few kΩ, which swamps R55.
+
+And not **GPIO45**, which is the `VDD_SPI` strapping pin: held wrong during
+reset, the flash rail comes up at the wrong voltage and the board does not boot.
+
+## Checking the bus
+
+`pio run -e knomi_i2cscan -t upload` builds with a boot-time I²C scan that
+reports over the same serial link, so `scripts/simulate.py` prints the result.
+It answers what the schematic can only imply — whether U6 really shares the
+touch panel's bus, and whether that LIS2DW12 footprint is populated. `0x15`
+appearing means the touch controller is on the bus being scanned.
+
+It runs before any task starts, so nothing else is using Wire at the time. Reset
+to scan again; there is no background polling, because sharing the bus with the
+touch driver from a second task is a race not worth adding to a diagnostic.

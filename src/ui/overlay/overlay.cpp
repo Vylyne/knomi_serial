@@ -8,6 +8,7 @@
 
 #include "board_conf.h"
 #include "printer/send/send_cmd.h"
+#include "ui/pages/page_helper.h"
 #include "ui/ui.h"
 #include "user_conf.h"
 
@@ -46,11 +47,10 @@ namespace ui
       lv_obj_t *stop = lv_button_create(lv_layer_top());
       lv_obj_set_size(stop, RES_H, 35);
       lv_obj_align(stop, LV_ALIGN_BOTTOM_MID, 0, 0);
-      lv_obj_set_style_bg_color(stop, COLOR_STOP_BG, LV_PART_MAIN);
-
       lv_obj_t *stop_label = lv_label_create(stop);
       lv_label_set_text(stop_label, "STOP");
       lv_obj_center(stop_label);
+      page_helper::set_button_color(stop, COLOR_STOP_BG);
 
       lv_obj_add_event_cb(
           stop,

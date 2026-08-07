@@ -98,24 +98,24 @@ void printer_update(const printer::State &state) {
   lv_obj_set_state(_z, LV_STATE_DISABLED, state.working);
 
   if (state.homed_x) {
-    lv_obj_set_style_bg_color(_x, COLOR_HOMED_BG, LV_PART_MAIN);
+    page_helper::set_button_color(_x, COLOR_HOMED_BG);
   } else {
-    lv_obj_set_style_bg_color(_x, COLOR_BTN_BG, LV_PART_MAIN);
+    page_helper::set_button_color(_x, COLOR_BTN_BG);
   }
   if (state.homed_y) {
-    lv_obj_set_style_bg_color(_y, COLOR_HOMED_BG, LV_PART_MAIN);
+    page_helper::set_button_color(_y, COLOR_HOMED_BG);
   } else {
-    lv_obj_set_style_bg_color(_y, COLOR_BTN_BG, LV_PART_MAIN);
+    page_helper::set_button_color(_y, COLOR_BTN_BG);
   }
   if (state.homed_z) {
-    lv_obj_set_style_bg_color(_z, COLOR_HOMED_BG, LV_PART_MAIN);
+    page_helper::set_button_color(_z, COLOR_HOMED_BG);
   } else {
-    lv_obj_set_style_bg_color(_z, COLOR_BTN_BG, LV_PART_MAIN);
+    page_helper::set_button_color(_z, COLOR_BTN_BG);
   }
   if (state.homed_x && state.homed_y && state.homed_z) {
-    lv_obj_set_style_bg_color(_all, COLOR_HOMED_BG, LV_PART_MAIN);
+    page_helper::set_button_color(_all, COLOR_HOMED_BG);
   } else {
-    lv_obj_set_style_bg_color(_all, COLOR_BTN_BG, LV_PART_MAIN);
+    page_helper::set_button_color(_all, COLOR_BTN_BG);
   }
 }
 

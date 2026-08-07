@@ -1,6 +1,8 @@
 #include "printing_page.h"
 
 #include <lvgl.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "board_conf.h"
 #include "ui/theme.h"
@@ -19,9 +21,15 @@ static lv_obj_t *_scrim_pct = nullptr;
 static lv_obj_t *_scrim_sub = nullptr;
 static lv_obj_t *_scrim_tool = nullptr;
 
+//: Remembers the material the sub-line scrim was last sized for, so it is
+//: measured again when the spool changes rather than on every packet.
+static char _sized_for[printer::kFilamentTypeMaxLen + 1] = {0};
+
 static lv_obj_t *_init_dot(lv_obj_t *parent);
 static lv_obj_t *_init_scrim(lv_obj_t *parent);
-static void _fit_scrim(lv_obj_t *scrim, lv_obj_t *label, int32_t pad_x, int32_t pad_y);
+static void _size_scrim(
+    lv_obj_t *scrim, const lv_font_t *font, const char *widest,
+    int32_t pad_x, int32_t pad_y, lv_align_t align, int32_t y);
 
 lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   lv_obj_t *page = lv_obj_create(parent);
@@ -73,7 +81,9 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   _scrim_sub = _init_scrim(page);
   _sub = lv_label_create(page);
   lv_obj_set_style_text_font(_sub, &lv_font_montserrat_16, LV_PART_MAIN);
-  lv_obj_align(_sub, LV_ALIGN_CENTER, 0, 34);
+  // 46, not 34: at 34 the two scrims met at the same pixel and read as one
+  // shape with a seam. This clears the percentage scrim by about 12px.
+  lv_obj_align(_sub, LV_ALIGN_CENTER, 0, 46);
 
   // White throughout: the scrim guarantees the ground, so nothing has to be
   // chosen against the filament colour.
@@ -82,6 +92,13 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   lv_obj_set_style_text_opa(_sub, LV_OPA_80, LV_PART_MAIN);
   lv_obj_set_style_text_color(_tool, lv_color_white(), LV_PART_MAIN);
   lv_obj_set_style_text_opa(_tool, LV_OPA_80, LV_PART_MAIN);
+
+  // Fixed from here on. "100%" is the widest the percentage ever gets, and the
+  // tool scrim is always sized as though the active dots were showing - a
+  // slightly generous pill on an idle tool costs nothing, while resizing when a
+  // tool takes over would be one more thing moving on screen.
+  _size_scrim(_scrim_pct, &lv_font_montserrat_48, "100%", 14, 4, LV_ALIGN_CENTER, -6);
+  _size_scrim(_scrim_tool, &lv_font_montserrat_16, "T00", 26, 4, LV_ALIGN_TOP_MID, 30);
 
   printer_update(state);
   return page;
@@ -97,20 +114,33 @@ static lv_obj_t *_init_scrim(lv_obj_t *parent) {
   return scrim;
 }
 
-static void _fit_scrim(lv_obj_t *scrim, lv_obj_t *label, int32_t pad_x, int32_t pad_y) {
-  if (lv_obj_has_flag(label, LV_OBJ_FLAG_HIDDEN)) {
-    lv_obj_add_flag(scrim, LV_OBJ_FLAG_HIDDEN);
-    return;
+// Sized to the widest string the label will ever hold, not to what it holds
+// right now. Montserrat is proportional, so measuring live made the scrim
+// breathe on every digit - "9%" to "10%" to "100%" - which draws the eye to the
+// mask instead of the number. The label stays centred inside a scrim that does
+// not move, so only the digits change.
+//
+// Both are aligned to the same anchor rather than the scrim being aligned to
+// the label, which keeps them concentric whatever the text measures and drops a
+// forced layout pass out of the update path.
+static void _size_scrim(
+    lv_obj_t *scrim, const lv_font_t *font, const char *widest,
+    int32_t pad_x, int32_t pad_y, lv_align_t align, int32_t y) {
+  lv_point_t size;
+  lv_text_get_size(&size, widest, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+
+  // filament_type allows 15 characters. Nothing real is longer than "NYLON",
+  // but an odd one would otherwise stretch the pill past the edge of the glass.
+  int32_t w = size.x + pad_x * 2;
+  if (w > RES_H - 30) {
+    w = RES_H - 30;
   }
-  lv_obj_remove_flag(scrim, LV_OBJ_FLAG_HIDDEN);
-  // The label's size is only correct once layout has caught up with the text
-  // that was just set into it.
-  lv_obj_update_layout(label);
-  lv_obj_set_size(
-      scrim,
-      lv_obj_get_width(label) + pad_x * 2,
-      lv_obj_get_height(label) + pad_y * 2);
-  lv_obj_align_to(scrim, label, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_size(scrim, w, size.y + pad_y * 2);
+  if (align == LV_ALIGN_TOP_MID) {
+    lv_obj_align(scrim, align, 0, y - pad_y);
+  } else {
+    lv_obj_align(scrim, align, 0, y);
+  }
 }
 
 static lv_obj_t *_init_dot(lv_obj_t *parent) {
@@ -161,11 +191,28 @@ void printer_update(const printer::State &state) {
     lv_obj_add_flag(_dot_r, LV_OBJ_FLAG_HIDDEN);
   }
 
-  _fit_scrim(_scrim_pct, _pct, 14, 4);
-  _fit_scrim(_scrim_sub, _sub, 12, 3);
-  // Wide enough to take the dots too: machine pink over pink filament would
-  // otherwise disappear exactly when the fill reaches the top of the screen.
-  _fit_scrim(_scrim_tool, _tool, show_dots ? 26 : 12, 4);
+  // The sub-line is the one width that genuinely varies, because the material
+  // name does. Measured against a three-digit temperature so the digits never
+  // move it, and only re-measured when the spool actually changes - which is
+  // once a print, not ten times a second.
+  if (strncmp(_sized_for, state.filament_type, sizeof(_sized_for) - 1) != 0) {
+    strncpy(_sized_for, state.filament_type, sizeof(_sized_for) - 1);
+    _sized_for[sizeof(_sized_for) - 1] = '\0';
+
+    char widest[printer::kFilamentTypeMaxLen + 8];
+    if (_sized_for[0] != '\0') {
+      snprintf(widest, sizeof(widest), "%s   888", _sized_for);
+    } else {
+      snprintf(widest, sizeof(widest), "888");
+    }
+    _size_scrim(_scrim_sub, &lv_font_montserrat_16, widest, 12, 3, LV_ALIGN_CENTER, 46);
+  }
+
+  if (lv_obj_has_flag(_tool, LV_OBJ_FLAG_HIDDEN)) {
+    lv_obj_add_flag(_scrim_tool, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_remove_flag(_scrim_tool, LV_OBJ_FLAG_HIDDEN);
+  }
 }
 
 }

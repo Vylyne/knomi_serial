@@ -14,6 +14,11 @@ typedef void (*printer_update_cb_t)(const printer::State&);
 void init();
 void update(const printer::State &state);
 
+// Name of the screen currently loaded, and the index of the page scrolled to
+// within it. Both are for reporting back to the host; call from the UI task.
+const char *screen_name();
+int page_index();
+
 namespace control {
 
 void register_printer_update_cb(lv_obj_t *obj, printer_update_cb_t cb);

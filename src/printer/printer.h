@@ -3,6 +3,12 @@
 
 namespace printer {
 
+// Wire format version for the host -> device State packet below. Bump this
+// whenever the layout of State changes so a mismatched host/firmware pair
+// reports itself instead of silently rendering garbage. Must be kept in sync
+// with _PROTO_VERSION in klippy_extras/knomi_serial.py.
+static const unsigned int kProtoVersion = 1;
+
 enum class Status {
   kDisconnected = 0x00,
   kIdle         = 0x01,

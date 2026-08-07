@@ -3,6 +3,7 @@
 import logging
 import dataclasses
 import enum
+import os
 import serial
 import struct
 
@@ -15,11 +16,38 @@ _SEND_PERIOD = 0.1
 
 _GCODES_MAX_LEN = 255
 
+# Wire format version for the state packet built by _send_state. Must be kept
+# in sync with printer::kProtoVersion in src/printer/printer.h.
+_PROTO_VERSION = 1
+
+# Used only if the VERSION file cannot be found next to this module, which
+# happens if knomi_serial.py was copied into klippy/extras rather than
+# symlinked there by install.sh.
+_FALLBACK_VERSION = "0.4.0"
+
+# A device reporting less often than this is treated as offline. The firmware
+# reports every REPORT_PERIOD_MS (2s), so this allows a couple of missed ones.
+_DEVICE_TIMEOUT = 10.0
+
 _CMD_PREFIX = b"KNOMI_CMD:"
+_CMD_MAX_LEN = 512
 _CMD_STOP = b"STOP"
 _CMD_RESTART = b"RESTART"
 _CMD_GCODE = b"GCODE:"
 _CMD_MOVE = b"MOVE:"
+_CMD_REPORT = b"RPT:"
+
+# Distinct from None, which is a legitimate "device sent no proto key" value.
+_UNSET = object()
+
+
+def _module_version():
+    path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    try:
+        with open(os.path.join(path, "VERSION")) as f:
+            return f.read().strip() or _FALLBACK_VERSION
+    except OSError:
+        return _FALLBACK_VERSION
 
 
 class PrinterStatus(enum.Enum):
@@ -81,6 +109,11 @@ class Knomi_Serial:
         self.update_timer = None
         self.last_busy = 0
         self.pending_cmd = b""
+
+        self.module_version = _module_version()
+        self.device_report = {}
+        self.device_report_time = None
+        self.warned_proto = _UNSET
 
         self.tram_type = PrinterTramType.NONE
         self.gcodes = b""
@@ -200,8 +233,12 @@ class Knomi_Serial:
                     if self.pending_cmd.startswith(_CMD_PREFIX):
                         self._process_cmd(self.pending_cmd[len(_CMD_PREFIX):])
                     self.pending_cmd = b""
-                else:
+                elif len(self.pending_cmd) < _CMD_MAX_LEN:
                     self.pending_cmd += char
+                else:
+                    # Line noise with no newline in sight; drop it rather than
+                    # growing the buffer without bound.
+                    self.pending_cmd = b""
         except serial.SerialException as e:
             logging.warning(f"{self.name}: Read error: {e}")
             try:
@@ -335,8 +372,69 @@ class Knomi_Serial:
                 pass
             self.serial = None
 
+    def _process_report(self, payload):
+        # Reports are `key=value;key=value`. Parsed permissively on purpose:
+        # unknown keys from a newer firmware are ignored, and keys missing from
+        # an older one simply stay absent from get_status.
+        fields = {}
+        for item in payload.decode("utf-8", "replace").split(";"):
+            key, sep, value = item.partition("=")
+            if sep:
+                fields[key.strip()] = value.strip()
+
+        self.device_report = fields
+        self.device_report_time = self.reactor.monotonic()
+
+        proto = fields.get("proto")
+        if proto != self.warned_proto and proto != str(_PROTO_VERSION):
+            logging.warning(
+                f"{self.name}: Protocol mismatch: device firmware "
+                f"{fields.get('fw', 'unknown')} speaks protocol {proto}, "
+                f"module {self.module_version} expects {_PROTO_VERSION}. "
+                f"Reflash the device firmware from this repository.",
+            )
+            self.warned_proto = proto
+
+    def get_status(self, eventtime):
+        report = self.device_report
+        age = None
+        if self.device_report_time is not None:
+            age = eventtime - self.device_report_time
+        online = age is not None and age < _DEVICE_TIMEOUT
+
+        def _int(key):
+            try:
+                return int(report[key])
+            except (KeyError, ValueError):
+                return None
+
+        proto = _int("proto")
+        return {
+            # Host side.
+            "connected": self.serial is not None and self.serial.is_open,
+            "port": self.config_serial,
+            "module_version": self.module_version,
+            "protocol_version": _PROTO_VERSION,
+            # Device side. All None until the device reports in.
+            "device_online": online,
+            "report_age": age,
+            "firmware_version": report.get("fw"),
+            "device_protocol_version": proto,
+            "protocol_match": proto == _PROTO_VERSION if proto else None,
+            "build_variant": report.get("var"),
+            "sleep_state": report.get("sleep"),
+            "screen": report.get("scr"),
+            "page": _int("page"),
+            "free_heap": _int("heap"),
+            "min_free_heap": _int("minheap"),
+            "device_uptime": _int("up"),
+        }
+
     def _process_cmd(self, cmd):
         try:
+            if cmd.startswith(_CMD_REPORT):
+                self._process_report(cmd[len(_CMD_REPORT) :])
+                return
             if cmd == _CMD_STOP:
                 self.printer.invoke_shutdown(f"Stop requested by {self.name}")
                 return

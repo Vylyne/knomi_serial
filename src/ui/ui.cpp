@@ -60,6 +60,33 @@ void update(const printer::State &state) {
   lv_obj_send_event(_overlay, _lv_event_printer_update, (void*) &state);
 }
 
+const char *screen_name() {
+  if (!_scr) {
+    return "none";
+  }
+  switch (_status) {
+  case printer::Status::kDisconnected:
+    return "init";
+  case printer::Status::kIdle:
+    return "idle";
+  case printer::Status::kPrinting:
+    return "printing";
+  case printer::Status::kShutdown:
+    return "shutdown";
+  }
+  return "unknown";
+}
+
+int page_index() {
+  if (!_scr) {
+    return 0;
+  }
+  // Pages are laid out side by side, one screen wide each, so the scroll
+  // position doubles as the page index. Round to the nearest page so a report
+  // landing mid-animation does not read as the page we just left.
+  return (lv_obj_get_scroll_x(_scr) + RES_H / 2) / RES_H;
+}
+
 namespace control {
 
 void _printer_update_cb(lv_event_t *e);

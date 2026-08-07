@@ -11,6 +11,9 @@
 #define SLEEP_TIMEOUT_MS 60000 // off after 60s
 #define SLEEP_HOT_THRESHOLD 40 // degrees C
 
+// How often to report firmware version and device state back to the host.
+#define REPORT_PERIOD_MS 2000
+
 // Overlay side indicators.
 #define SHOW_SIDE_ARCS 1
 

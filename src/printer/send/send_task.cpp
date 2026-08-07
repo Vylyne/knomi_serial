@@ -20,6 +20,7 @@ const char *kStop = "STOP";
 const char *kRestart = "RESTART";
 const char *kGcode = "GCODE:";
 const char *kMove = "MOVE:";
+const char *kReport = "RPT:";
 
 }
 
@@ -61,6 +62,12 @@ void send_gcode(const char *gcode) {
 void send_move(const char *dir) {
   std::string cmd = Commands::kMove;
   cmd.append(dir);
+  send_cmd(cmd.c_str());
+}
+
+void send_report(const char *fields) {
+  std::string cmd = Commands::kReport;
+  cmd.append(fields);
   send_cmd(cmd.c_str());
 }
 

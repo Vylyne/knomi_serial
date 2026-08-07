@@ -11,12 +11,14 @@ extern const char *kStop;
 extern const char *kRestart;
 extern const char *kGcode;
 extern const char *kMove;
+extern const char *kReport;
 
 }
 
 void send_stop();
 void send_gcode(const char *gcode);
 void send_move(const char *dir);
+void send_report(const char *fields);
 void send_cmd(const char *cmd);
 
 }

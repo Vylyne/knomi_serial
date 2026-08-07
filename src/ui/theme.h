@@ -26,8 +26,13 @@ namespace ui
     //: nothing anchors identity by hue alone, or loading pink ABS would erase it.
     lv_color_t machine();
 
-    //: Black or white, whichever survives on `ground`. For text over the fill,
-    //: which can be any colour the slicer names - including white and yellow.
+    //: Black or white, whichever survives on `ground`.
+    //:
+    //: Nothing calls this yet. The printing page went to scrims instead, because
+    //: a label crossing the rising fill spends too long half over it for either
+    //: ink to work. This is here for the corner key legends, which sit at the
+    //: rim directly over the fill and are too small to scrim individually.
+    //: Verified against WCAG contrast for ten filament colours.
     lv_color_t ink_on(lv_color_t ground);
 
     //: Steel through amber to orange-red as `temp` closes on `target`.

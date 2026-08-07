@@ -16,8 +16,6 @@ namespace ui
   namespace overlay
   {
 
-    static lv_obj_t *_progress = nullptr;
-
     lv_obj_t *_init_arc(int start, int end);
     void _arc_hit_handler(lv_event_t *e);
 
@@ -36,17 +34,12 @@ namespace ui
       lv_obj_t *scr = lv_obj_create(nullptr);
       control::register_printer_update_cb(scr, _printer_update_handler);
 
-      _progress = lv_arc_create(lv_layer_top());
-      lv_obj_set_size(_progress, 240, 240);
-      lv_obj_center(_progress);
-      lv_arc_set_bg_angles(_progress, 120, 60);
-      lv_arc_set_range(_progress, 0, 100);
-      lv_obj_set_style_arc_width(_progress, 3, LV_PART_MAIN);
-      lv_obj_set_style_arc_width(_progress, 3, LV_PART_INDICATOR);
-      lv_obj_set_style_arc_color(_progress, COLOR_PROGRESS_ARC, LV_PART_INDICATOR);
-      lv_obj_set_style_opa(_progress, 0, LV_PART_KNOB);
-      lv_obj_remove_flag(_progress, LV_OBJ_FLAG_CLICKABLE);
-      lv_obj_add_flag(_progress, LV_OBJ_FLAG_HIDDEN);
+      // No progress arc here any more. It swept 300 degrees from the lower left
+      // up over the top, in a green belonging to no colour role, and since the
+      // printing screen became the fill it was saying a second time what the
+      // fill already says - on top of it, across the part of the screen the fill
+      // is densest. The control page carries its own readout instead, which is
+      // the only place the arc was still earning its keep.
 
       // Blocking Stop Button in Toolchanger Mode
 #if !defined(TOOLCHANGER) || TOOLCHANGER == 0
@@ -133,15 +126,6 @@ namespace ui
         lv_obj_clear_flag(lv_layer_top(), LV_OBJ_FLAG_HIDDEN);
       }
 
-      if (state.status == printer::Status::kPrinting)
-      {
-        lv_arc_set_value(_progress, state.progress);
-        lv_obj_clear_flag(_progress, LV_OBJ_FLAG_HIDDEN);
-      }
-      else
-      {
-        lv_obj_add_flag(_progress, LV_OBJ_FLAG_HIDDEN);
-      }
     }
 
     // Blocking Stop Button in Toolchanger Mode

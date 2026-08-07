@@ -10,6 +10,7 @@ namespace print_control_page {
 static bool _paused = false;
 static lv_obj_t *_pause = nullptr;
 static lv_obj_t *_cancel = nullptr;
+static lv_obj_t *_progress = nullptr;
 
 void _update_pause();
 void _pause_click_handler(lv_event_t *e);
@@ -19,6 +20,12 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   lv_obj_t *page = page_helper::create_page(parent, "PRINTING");
 
   _paused = state.paused;
+
+  // The fill on the previous page is the progress indicator now, and it is not
+  // visible from here. This is the only other place it was ever needed.
+  _progress = lv_label_create(page);
+  lv_obj_set_style_text_font(_progress, &lv_font_montserrat_24, LV_PART_MAIN);
+  lv_obj_align(_progress, LV_ALIGN_TOP_MID, 0, 42);
 
   _pause = page_helper::create_center_button(
       page,
@@ -42,6 +49,8 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
 }
 
 void printer_update(const printer::State &state) {
+  lv_label_set_text_fmt(_progress, "%d%%", (int)state.progress);
+
   if (state.paused != _paused) {
     _paused = state.paused;
     _update_pause();

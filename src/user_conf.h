@@ -49,10 +49,11 @@
 // unknown filament and black filament are different facts.
 #define COLOR_FILAMENT_UNKNOWN 0x5A5A5A
 
-// Progress fill floods the screen, so text over it flips between black and
-// white by luminance. This is the crossover, in percent, at which the readout
-// is considered submerged.
-#define FILL_INK_CROSSOVER 55
+// Readouts sit on a scrim - a dark pill sized to the text - so they never have
+// to be legible against the filament colour directly. Black over black is a
+// no-op, so this is invisible until the fill is actually behind it. Raise it if
+// pale filaments still crowd the text, lower it to let more colour through.
+#define SCRIM_OPA LV_OPA_60
 
 // All screens background color.
 #define COLOR_BG lv_color_hex(0x000000)
@@ -60,7 +61,6 @@
 // Overlay colors.
 #define COLOR_STOP_BG lv_color_hex(0x900000)
 #define COLOR_SIDE_ARC lv_color_hex(0x444444)
-#define COLOR_PROGRESS_ARC lv_color_hex(0x238932)
 
 // Button colors.
 #define COLOR_BTN_BG lv_color_hex(0xffbaf8)

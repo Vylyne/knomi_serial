@@ -32,6 +32,28 @@
 // Index of default idle screen page.
 #define IDLE_PAGE_START 1
 
+// ---------------------------------------------------------------------------
+// Colour
+//
+// Three roles that must not be collapsed into each other - see ui/theme.h.
+// Machine identity is fixed chrome, filament comes off the wire per tool, and
+// heat is a quantity. Anything below that is not one of those three is a page
+// detail rather than part of the system.
+// ---------------------------------------------------------------------------
+
+// Machine identity. The printer's own accent, worn by chrome that is about the
+// machine rather than the print.
+#define COLOR_MACHINE 0xFFA7C4
+
+// Shown when the host has not said what is loaded. Deliberately not black -
+// unknown filament and black filament are different facts.
+#define COLOR_FILAMENT_UNKNOWN 0x5A5A5A
+
+// Progress fill floods the screen, so text over it flips between black and
+// white by luminance. This is the crossover, in percent, at which the readout
+// is considered submerged.
+#define FILL_INK_CROSSOVER 55
+
 // All screens background color.
 #define COLOR_BG lv_color_hex(0x000000)
 

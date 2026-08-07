@@ -16,6 +16,10 @@ static lv_color_t _buf2[RES_H * RES_V / 10];
 
 static lv_indev_t *_indev = nullptr;
 
+static volatile uint32_t _flush_count = 0;
+static volatile uint32_t _flush_px = 0;
+static volatile uint32_t _flush_us = 0;
+
 void _flush_display(lv_display_t *display, const lv_area_t *area, uint8_t *color);
 void _read_touchscreen(lv_indev_t *indev, lv_indev_data_t *data);
 
@@ -88,12 +92,30 @@ void _flush_display(lv_display_t *display, const lv_area_t *area, uint8_t *color
   uint32_t w = area->x2 - area->x1 + 1;
   uint32_t h = area->y2 - area->y1 + 1;
 
+  uint32_t enter = micros();
+
   _tft->startWrite();
   _tft->setAddrWindow(area->x1, area->y1, w, h);
   _tft->pushColors((uint16_t*) color, w * h, true);
   _tft->endWrite();
 
+  // Pixels actually pushed over SPI is the honest measure of what a screen
+  // costs - a whole frame is 57600 of them, and at this panel's clock that
+  // alone is over 11ms.
+  _flush_count++;
+  _flush_px += w * h;
+  _flush_us += micros() - enter;
+
   lv_disp_flush_ready(display);
+}
+
+void take_flush_stats(uint32_t *count, uint32_t *pixels, uint32_t *micros_spent) {
+  *count = _flush_count;
+  *pixels = _flush_px;
+  *micros_spent = _flush_us;
+  _flush_count = 0;
+  _flush_px = 0;
+  _flush_us = 0;
 }
 
 void _read_touchscreen(lv_indev_t *indev, lv_indev_data_t *data) {

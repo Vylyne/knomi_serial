@@ -17,7 +17,17 @@
 namespace ui
 {
 
-  void _send_report(const char *sleep_state);
+  struct RenderStats
+  {
+    //: Share of wall time spent inside lv_task_handler, in permille. The
+    //: headroom number: what is left is what a heavier screen can spend.
+    uint32_t busy;
+    //: Longest single lv_task_handler call in the window, microseconds. A full
+    //: frame hides here - the average will not show it.
+    uint32_t peak;
+  };
+
+  void _send_report(const char *sleep_state, const RenderStats &stats);
 
   void ui_task(void *param)
   {
@@ -30,13 +40,23 @@ namespace ui
     static bool _last_used = true;
 
     uint32_t last_active = millis();
-    uint32_t last_report = 0;
+    uint32_t last_report = millis();
     bool sleeping = false;
     bool dimmed = false;
 
+    uint32_t busy_us = 0;
+    uint32_t peak_us = 0;
+
     while (true)
     {
+      uint32_t enter = micros();
       lv_task_handler();
+      uint32_t spent = micros() - enter;
+      busy_us += spent;
+      if (spent > peak_us)
+      {
+        peak_us = spent;
+      }
 
       if (display::cst816s::consume_touched())
       {
@@ -94,24 +114,47 @@ namespace ui
       // Report our own state upstream. This repeats rather than announcing once
       // at boot so the host recovers the version and UI state after a Klipper
       // restart or a device reset, without needing a handshake.
-      if (millis() - last_report >= REPORT_PERIOD_MS)
+      uint32_t now = millis();
+      if (now - last_report >= REPORT_PERIOD_MS)
       {
-        last_report = millis();
-        _send_report(sleeping ? "off" : (dimmed ? "dim" : "awake"));
+        uint32_t window_ms = now - last_report;
+        last_report = now;
+
+        RenderStats stats;
+        // busy_us / (window_ms * 1000) is the fraction; permille cancels the
+        // thousand and keeps it in integers.
+        stats.busy = window_ms ? busy_us / window_ms : 0;
+        stats.peak = peak_us;
+        busy_us = 0;
+        peak_us = 0;
+
+        _send_report(sleeping ? "off" : (dimmed ? "dim" : "awake"), stats);
       }
 
       delay(5);
     }
   }
 
-  void _send_report(const char *sleep_state)
+  void _send_report(const char *sleep_state, const RenderStats &stats)
   {
-    char fields[256];
+    lv_mem_monitor_t mem;
+    lv_mem_monitor(&mem);
+
+    uint32_t flush_count = 0, flush_px = 0, flush_us = 0;
+    display::take_flush_stats(&flush_count, &flush_px, &flush_us);
+
+    char fields[320];
     snprintf(
         fields,
         sizeof(fields),
         "fw=%s;proto=%u;var=%s;sleep=%s;scr=%s;page=%d;"
-        "heap=%u;minheap=%u;up=%u",
+        "heap=%u;minheap=%u;up=%u;"
+        // Everything past here is for judging what a heavier screen can afford:
+        // how much of the frame budget the UI already spends, how long its worst
+        // frame took, and whether the PSRAM a full-screen draw buffer would need
+        // is actually there.
+        "busy=%u;peak=%u;psram=%u;lvfree=%u;lvfrag=%u;"
+        "flush=%u;fpx=%u;fus=%u",
         KNOMI_FW_VERSION,
         printer::kProtoVersion,
         KNOMI_BUILD_VARIANT,
@@ -120,7 +163,15 @@ namespace ui
         page_index(),
         (unsigned int)ESP.getFreeHeap(),
         (unsigned int)ESP.getMinFreeHeap(),
-        (unsigned int)(millis() / 1000));
+        (unsigned int)(millis() / 1000),
+        (unsigned int)stats.busy,
+        (unsigned int)stats.peak,
+        (unsigned int)ESP.getFreePsram(),
+        (unsigned int)mem.free_size,
+        (unsigned int)mem.frag_pct,
+        (unsigned int)flush_count,
+        (unsigned int)flush_px,
+        (unsigned int)flush_us);
     printer::send::send_report(fields);
   }
 }

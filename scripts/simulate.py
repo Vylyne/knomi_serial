@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Drive a Knomi_Serial display with made-up printer state, over USB.
+"""Stand in for Klipper so a display can be exercised on a bench.
 
-For working on the UI without starting a print - or without a printer. Plug the
-display into any machine with Python and pyserial and run this at it.
+Speaks both directions of the real link. Downstream it sends state packets built
+by knomi_serial.encode_state - the same encoder Klipper uses, so the screen sees
+byte for byte what it sees in service. Upstream it answers the commands the
+display sends, so pressing PAUSE actually pauses, G28 actually homes, and the
+stop button actually shuts the machine down.
 
-The packets come from knomi_serial.encode_state, the same encoder Klipper uses,
-so what the screen sees here is byte for byte what it sees in service. That is
-the point: a separate implementation would drift, and a bench test that
-exercises the test rig teaches you nothing about the firmware.
+That second half is the point. Without it the buttons do nothing and half the UI
+cannot be tested at all.
 
     python scripts/simulate.py --list
-    python scripts/simulate.py /dev/ttyUSB0
-    python scripts/simulate.py COM7 --progress 54 --color FFA7C4 --type ABS
-    python scripts/simulate.py COM7 --duration 30 --cycle-colours
+    python scripts/simulate.py COM5
+    python scripts/simulate.py COM5 --progress 54 --color FFA7C4 --type ABS
+    python scripts/simulate.py COM5 --duration 30 --cycle-colours
 
-With no pinned values it runs a whole print on loop: cold, heating, printing
-from nothing to done, then finished. Pin anything and that value stops moving,
-so `--progress 54` parks the fill exactly at the ink crossover.
+With no pinned values it loops a whole print: cold, heating, printing, finished.
+Pin anything and that value stops moving, so `--progress 54` parks the fill at
+the ink crossover.
 
 If the display is wired to a running Klipper, stop Klipper first. Both would be
 writing to the same port and the screen would see interleaved packets.
@@ -54,6 +55,280 @@ PRESETS = [
     ("8A6BD6", "TPU"),
 ]
 
+#: Roughly how long each command keeps the machine busy, in seconds. The screen
+#: watches `working` to know something is moving, so a command that completed
+#: instantly would never show it.
+DURATIONS = {
+    "G28": 6.0,
+    "G28 X": 2.5,
+    "G28 Y": 2.5,
+    "G28 Z": 3.0,
+    "Z_TILT_ADJUST": 8.0,
+    "QUAD_GANTRY_LEVEL": 8.0,
+    "LOAD_FILAMENT": 6.0,
+    "UNLOAD_FILAMENT": 6.0,
+}
+
+MOVE_STEP = {"X": 10.0, "Y": 10.0, "Z": 10.0}
+
+
+class Sim:
+    """The printer the display thinks it is talking to."""
+
+    def __init__(self, args):
+        self.args = args
+        self.clock = 0.0
+        self.paused = False
+        self.shutdown = None
+        self.homed = {"X": False, "Y": False, "Z": False}
+        self.pos = {"X": 0.0, "Y": 0.0, "Z": 0.0}
+        self.busy_until = 0.0
+        self.events = []
+
+    # -- time ----------------------------------------------------------
+
+    def tick(self, dt):
+        # A paused print stops advancing, which is the whole observable
+        # difference between paused and printing.
+        if not self.paused and self.shutdown is None:
+            self.clock += dt
+
+    @property
+    def working(self):
+        return time.time() < self.busy_until
+
+    def _busy(self, seconds):
+        self.busy_until = max(self.busy_until, time.time() + seconds)
+
+    def note(self, text):
+        self.events.append(text)
+
+    # -- upstream commands ---------------------------------------------
+
+    def handle(self, body):
+        """A KNOMI_CMD the display sent, minus its prefix."""
+        if body == b"STOP":
+            # Klipper uppercases the first line of the shutdown message and
+            # sends it in the gcodes field; the shutdown screen renders that.
+            self.shutdown = "STOP REQUESTED BY KNOMI_SERIAL"
+            self.note("STOP -> shutdown")
+            return
+
+        if body == b"RESTART":
+            self.shutdown = None
+            self.paused = False
+            self.homed = {axis: False for axis in self.homed}
+            self.busy_until = 0.0
+            self.note("RESTART -> back to idle, unhomed")
+            return
+
+        if body.startswith(b"GCODE:"):
+            self._gcode(body[len(b"GCODE:"):].decode("utf-8", "replace").strip())
+            return
+
+        if body.startswith(b"MOVE:"):
+            self._move(body[len(b"MOVE:"):].decode("utf-8", "replace").strip())
+            return
+
+        self.note(f"unrecognised: {body.decode('utf-8', 'replace')}")
+
+    def _gcode(self, gcode):
+        upper = gcode.upper()
+
+        if upper == "PAUSE":
+            self.paused = True
+            self.note("PAUSE")
+            return
+        if upper == "RESUME":
+            self.paused = False
+            self.note("RESUME")
+            return
+        if upper == "CANCEL_PRINT":
+            # Jump the clock past the printing phase so the loop lands in
+            # "finished" rather than snapping back to a fresh print.
+            warm = 8.0
+            total = warm + self.args.duration + 6.0
+            self.clock = (self.clock // total) * total + warm + self.args.duration
+            self.paused = False
+            self.note("CANCEL_PRINT")
+            return
+
+        if upper == "G28":
+            self.homed = {axis: True for axis in self.homed}
+        elif upper.startswith("G28 "):
+            for axis in upper[4:].split():
+                if axis in self.homed:
+                    self.homed[axis] = True
+
+        self._busy(DURATIONS.get(upper, 2.0))
+        self.note(gcode)
+
+    def _move(self, direction):
+        # The device sends e.g. "X+" - axis then sign, which is how
+        # knomi_serial._process_cmd reads it too.
+        if len(direction) < 2:
+            self.note(f"bad move: {direction}")
+            return
+        axis, sign = direction[-2].upper(), direction[-1]
+        if axis not in self.pos or sign not in "+-":
+            self.note(f"bad move: {direction}")
+            return
+        step = MOVE_STEP[axis] * (1 if sign == "+" else -1)
+        self.pos[axis] += step
+        self._busy(0.8)
+        self.note(f"move {axis}{sign} -> {self.pos[axis]:.0f}")
+
+    # -- downstream state ----------------------------------------------
+
+    def phase(self):
+        """Where the fake print is. (label, progress, hotend, target, bed, bedt)"""
+        warm, done = 8.0, 6.0
+        duration = self.args.duration
+        total = warm + duration + done
+        t = self.clock % total
+
+        if t < warm:
+            f = t / warm
+            return ("heating", 0.0, 25 + 220 * f, 245, 25 + 75 * f, 100)
+        t -= warm
+        if t < duration:
+            return ("printing", 100.0 * t / duration, 243, 245, 100, 100)
+        t -= duration
+        f = t / done
+        return ("finished", 100.0, 245 - 200 * f, 0, 100 - 70 * f, 0)
+
+    def state(self):
+        args = self.args
+        label, progress, hot, tgt, bed, bedt = self.phase()
+
+        if self.shutdown is not None:
+            return "shutdown", k.PrinterState(
+                status=k.PrinterStatus.SHUTDOWN,
+                gcodes=self.shutdown.encode("utf-8")[:k._GCODES_MAX_LEN],
+            )
+
+        status = k.PrinterStatus.PRINTING if label == "printing" else k.PrinterStatus.IDLE
+        if args.status is not None:
+            status = {
+                "idle": k.PrinterStatus.IDLE,
+                "printing": k.PrinterStatus.PRINTING,
+                "shutdown": k.PrinterStatus.SHUTDOWN,
+            }[args.status]
+        if args.progress is not None:
+            progress = args.progress
+        if args.hotend is not None:
+            hot = args.hotend
+        if args.target is not None:
+            tgt = args.target
+
+        if args.cycle_colours:
+            step = max(1.0, args.duration / 4)
+            colour, ftype = PRESETS[int(self.clock // step) % len(PRESETS)]
+        else:
+            colour, ftype = PRESETS[0]
+        if args.color is not None:
+            colour = args.color
+        if args.type is not None:
+            ftype = args.type
+
+        return label, k.PrinterState(
+            status=status,
+            working=self.working,
+            paused=self.paused,
+            homed_x=self.homed["X"],
+            homed_y=self.homed["Y"],
+            homed_z=self.homed["Z"],
+            used=args.used,
+            active=args.active,
+            hotend_temp=hot,
+            hotend_target=tgt,
+            bed_temp=bed,
+            bed_target=bedt,
+            chamber_temp=args.chamber,
+            chamber_target=0,
+            mcu_temp=0,
+            mcu_target=0,
+            progress=progress,
+            tool_number=args.tool,
+            filament_color=int(colour, 16),
+            tram_type=k.PrinterTramType.QGL,
+            filament_type=ftype.encode("utf-8")[:15],
+            gcodes=b"HOME\nQGL\nPURGE",
+        )
+
+
+def _bytes(value):
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return "?"
+    if n >= 1 << 20:
+        return f"{n / (1 << 20):.1f}M"
+    if n >= 1 << 10:
+        return f"{n // (1 << 10)}k"
+    return str(n)
+
+
+def drain(port, sim, seen):
+    """Read the display's uplink: reports to the status line, commands to the sim."""
+    try:
+        waiting = port.in_waiting
+    except (OSError, serial.SerialException):
+        return
+    if not waiting:
+        return
+
+    seen["buf"] += port.read(waiting)
+    while b"\n" in seen["buf"]:
+        line, _, seen["buf"] = seen["buf"].partition(b"\n")
+        line = line.strip()
+        if not line.startswith(b"KNOMI_CMD:"):
+            continue
+        body = line[len(b"KNOMI_CMD:"):]
+
+        if body.startswith(b"RPT:"):
+            text = body[4:].decode("utf-8", "replace")
+            fields = dict(p.split("=", 1) for p in text.split(";") if "=" in p)
+            seen["rpt"] = fields
+
+            # Identity is announced once; the live numbers ride the status line
+            # instead, or every heap reading would scroll the screen away.
+            identity = {key: fields.get(key) for key in ("fw", "proto", "var")}
+            if identity != seen.get("identity"):
+                seen["identity"] = identity
+                sim.note(
+                    "fw {fw} proto {proto} {var}  psram {ps}  lvgl free {lv}".format(
+                        fw=fields.get("fw", "?"), proto=fields.get("proto", "?"),
+                        var=fields.get("var", "?"),
+                        ps=_bytes(fields.get("psram")),
+                        lv=_bytes(fields.get("lvfree")),
+                    )
+                )
+                if fields.get("proto") != str(k._PROTO_VERSION):
+                    sim.note(
+                        f"WARNING: display speaks protocol {fields.get('proto')}, "
+                        f"this encoder writes {k._PROTO_VERSION}. Reflash it."
+                    )
+        elif body.startswith(b"I2C:"):
+            sim.note("i2c: " + body[4:].decode("utf-8", "replace"))
+        else:
+            sim.handle(body)
+
+
+def device_load(seen):
+    """What the screen says about its own load."""
+    rpt = seen.get("rpt")
+    if not rpt:
+        return "device silent"
+    if "busy" not in rpt:
+        return "heap {}".format(_bytes(rpt.get("heap")))
+    return "ui {:.1f}% peak {:.1f}ms heap {} frag {}%".format(
+        int(rpt["busy"]) / 10.0,
+        int(rpt.get("peak", 0)) / 1000.0,
+        _bytes(rpt.get("heap")),
+        rpt.get("lvfrag", "?"),
+    )
+
 
 def list_ports():
     ports = list(serial.tools.list_ports.comports())
@@ -64,123 +339,12 @@ def list_ports():
         print(f"  {p.device:20} {p.description}")
 
 
-def phase(elapsed, duration):
-    """Where we are in a looping fake print.
-
-    Returns (status, progress, hotend, target, bed, bed_target, label). The
-    heat-up and cool-down are real ramps rather than jumps, because watching the
-    heat colour cross from steel to amber is half of what this is for.
-    """
-    warm, done = 8.0, 6.0
-    total = warm + duration + done
-    t = elapsed % total
-
-    if t < warm:
-        k_ = t / warm
-        return ("idle", 0, 25 + 220 * k_, 245, 25 + 75 * k_, 100, "heating")
-    t -= warm
-    if t < duration:
-        return ("printing", 100.0 * t / duration, 243 + 2 * (t % 2), 245, 100, 100, "printing")
-    t -= duration
-    k_ = t / done
-    return ("idle", 100, 245 - 200 * k_, 0, 100 - 70 * k_, 0, "finished")
-
-
-def build(args, elapsed):
-    status, progress, hot, tgt, bed, bedt, label = phase(elapsed, args.duration)
-
-    if args.status is not None:
-        status = args.status
-    if args.progress is not None:
-        progress = args.progress
-    if args.hotend is not None:
-        hot = args.hotend
-    if args.target is not None:
-        tgt = args.target
-
-    if args.cycle_colours:
-        colour, ftype = PRESETS[int(elapsed // max(1.0, args.duration / 4)) % len(PRESETS)]
-    else:
-        colour, ftype = PRESETS[0]
-    if args.color is not None:
-        colour = args.color
-    if args.type is not None:
-        ftype = args.type
-
-    state = k.PrinterState(
-        status=k.PrinterStatus.PRINTING if status == "printing" else (
-            k.PrinterStatus.SHUTDOWN if status == "shutdown" else k.PrinterStatus.IDLE
-        ),
-        working=status == "printing",
-        paused=args.paused,
-        homed_x=True,
-        homed_y=True,
-        homed_z=True,
-        used=args.used,
-        active=args.active,
-        hotend_temp=hot,
-        hotend_target=tgt,
-        bed_temp=bed,
-        bed_target=bedt,
-        chamber_temp=args.chamber,
-        chamber_target=0,
-        mcu_temp=0,
-        mcu_target=0,
-        progress=progress,
-        tool_number=args.tool,
-        filament_color=int(colour, 16),
-        tram_type=k.PrinterTramType.NONE,
-        filament_type=ftype.encode("utf-8")[:15],
-        gcodes=b"HOME\nQGL\nPURGE",
-    )
-    return state, label
-
-
-def drain(port, seen):
-    """Print whatever the display says back, so the link is visibly two-way."""
-    try:
-        waiting = port.in_waiting
-    except (OSError, serial.SerialException):
-        return
-    if not waiting:
-        return
-    seen["buf"] += port.read(waiting)
-    while b"\n" in seen["buf"]:
-        line, _, seen["buf"] = seen["buf"].partition(b"\n")
-        line = line.strip()
-        if not line.startswith(b"KNOMI_CMD:"):
-            continue
-        body = line[len(b"KNOMI_CMD:"):]
-        if body.startswith(b"RPT:"):
-            text = body[4:].decode("utf-8", "replace")
-            fields = dict(
-                part.split("=", 1) for part in text.split(";") if "=" in part
-            )
-            if fields != seen.get("last_rpt"):
-                seen["last_rpt"] = fields
-                print(
-                    "\n  device: fw={fw} proto={proto} {var} "
-                    "sleep={sleep} screen={scr} heap={heap}".format(
-                        fw=fields.get("fw", "?"), proto=fields.get("proto", "?"),
-                        var=fields.get("var", "?"), sleep=fields.get("sleep", "?"),
-                        scr=fields.get("scr", "?"), heap=fields.get("heap", "?"),
-                    )
-                )
-                if fields.get("proto") != str(k._PROTO_VERSION):
-                    print(
-                        f"  WARNING: display speaks protocol {fields.get('proto')}, "
-                        f"this encoder writes {k._PROTO_VERSION}. Reflash it."
-                    )
-        else:
-            print("\n  device: " + body.decode("utf-8", "replace"))
-
-
 def main():
     p = argparse.ArgumentParser(
-        description="Feed a Knomi_Serial display simulated printer state.",
+        description="Stand in for Klipper and drive a Knomi_Serial display.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("port", nargs="?", help="serial port, e.g. COM7 or /dev/ttyUSB0")
+    p.add_argument("port", nargs="?", help="serial port, e.g. COM5 or /dev/ttyUSB0")
     p.add_argument("--list", action="store_true", help="list serial ports and exit")
     p.add_argument("--baud", type=int, default=k._BAUD_RATE)
     p.add_argument("--duration", type=float, default=45.0,
@@ -197,7 +361,6 @@ def main():
     p.add_argument("--tool", type=int, default=0, help="tool number, -1 for none")
     p.add_argument("--cycle-colours", "--cycle-colors", dest="cycle_colours",
                    action="store_true", help="step through the preset filaments")
-    p.add_argument("--paused", action="store_true")
     p.add_argument("--no-used", dest="used", action="store_false",
                    help="this tool is not in the job - the screen should sleep")
     p.add_argument("--no-active", dest="active", action="store_false",
@@ -227,32 +390,39 @@ def main():
     except serial.SerialException as e:
         sys.exit(f"Could not open {args.port}: {e}")
 
-    print(f"Driving {args.port} at {args.baud}. Ctrl-C to stop.")
+    print(f"Driving {args.port} at {args.baud}. Buttons on the screen work. Ctrl-C to stop.")
+    sim = Sim(args)
     seen = {"buf": b""}
-    start = time.time()
-    last_label = None
+    last = time.time()
 
     try:
         while True:
-            elapsed = time.time() - start
-            state, label = build(args, elapsed)
-            port.write(k.encode_state(state))
+            now = time.time()
+            sim.tick(now - last)
+            last = now
 
-            if label != last_label and not args.once:
-                last_label = label
-                print(f"\n[{label}]")
+            label, state = sim.state()
+            port.write(k.encode_state(state))
+            drain(port, sim, seen)
+
+            # Anything the display did scrolls above the status line, so the
+            # cause of a state change is visible rather than inferred.
+            while sim.events:
+                print("\r  \033[K" + sim.events.pop(0))
+
+            homed = "".join(a if sim.homed[a] else "-" for a in ("X", "Y", "Z"))
             print(
-                "\r  {:>3.0f}%  hotend {:>3.0f}/{:<3.0f}  bed {:>3.0f}  "
-                "#{}  {:<5} {}".format(
+                "\r  {:<9} {:>3.0f}%  {:>3.0f}/{:<3.0f}  {:<5} homed {}{}{}  |  {}\033[K".format(
+                    "paused" if sim.paused else label,
                     state.progress, state.hotend_temp, state.hotend_target,
-                    state.bed_temp, f"{state.filament_color:06X}",
-                    state.filament_type.decode(),
-                    "" if state.used else "[not in job]",
+                    state.filament_type.decode(), homed,
+                    "  MOVING" if sim.working else "",
+                    "" if state.used else "  [not in job]",
+                    device_load(seen),
                 ),
                 end="", flush=True,
             )
 
-            drain(port, seen)
             if args.once:
                 break
             time.sleep(_PERIOD)

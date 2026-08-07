@@ -18,6 +18,17 @@ namespace printer
     static State _state;
     static SemaphoreHandle_t _semaphore = nullptr;
 
+    //: Set by write(), cleared once a reader has seen it. Starts true so the
+    //: first read builds the initial screen with no packet having arrived.
+    //:
+    //: Without this, try_read handed the state to the UI on every pass of the
+    //: UI loop - two hundred times a second - and lv_label_set_text_fmt
+    //: invalidates its label whether or not the text changed. The screen was
+    //: therefore fully repainted every refresh period forever, whether or not
+    //: anything had happened. Measured at 85% of the UI task's wall clock with
+    //: the printer sending nothing at all.
+    static volatile bool _dirty = true;
+
     bool _validate_footer();
 
     void recv_task(void *param)
@@ -78,8 +89,13 @@ namespace printer
       {
         return;
       }
+      if (!_dirty)
+      {
+        return;
+      }
       if (xSemaphoreTake(_semaphore, 0) == pdTRUE)
       {
+        _dirty = false;
         cb(_state);
         xSemaphoreGive(_semaphore);
       }
@@ -89,6 +105,7 @@ namespace printer
     {
       xSemaphoreTake(_semaphore, portMAX_DELAY);
       cb(&_state);
+      _dirty = true;
       xSemaphoreGive(_semaphore);
     }
 

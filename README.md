@@ -108,6 +108,39 @@ unnamed section):
 Every device-side field is `None` until the first report arrives, so a device running
 firmware older than this feature reads as `device_online: False` with a `None` version.
 
+### Testing the display without printing
+
+`scripts/simulate.py` drives a display with made-up state over USB, so UI work
+does not need a printer — or even Klipper. It builds packets with
+`knomi_serial.encode_state`, the same encoder the module uses, so the screen sees
+byte-for-byte what it sees in service.
+
+```bash
+pip install pyserial
+
+python scripts/simulate.py --list                    # find the port
+python scripts/simulate.py COM7                      # loop a whole fake print
+python scripts/simulate.py COM7 --progress 54        # park the fill mid-screen
+python scripts/simulate.py COM7 --cycle-colours      # step through filaments
+python scripts/simulate.py COM7 --no-used            # should dim, then sleep
+```
+
+With nothing pinned it loops cold → heating → printing 0–100% → finished, ramping
+temperatures rather than jumping them so the heat colour visibly crosses steel to
+amber. Pin any value and it stops moving: `--progress 54` parks the fill right at
+the ink crossover, which is where black-versus-white text is worth checking
+against a real panel.
+
+`--cycle-colours` walks the presets, which deliberately include the awkward cases
+— white and yellow, where the ink must flip to black; true black, where it must
+not; and a pink close enough to the machine accent to check identity survives it.
+
+Whatever the display reports back is printed as it arrives, so a protocol
+mismatch shows up immediately rather than as a screen full of garbage.
+
+**Stop Klipper first** if the display is wired to a running host. Both would be
+writing to the same port and the screen would see interleaved packets.
+
 ### Versioning
 
 The canonical version is the `VERSION` file at the repo root. `scripts/version.py` runs

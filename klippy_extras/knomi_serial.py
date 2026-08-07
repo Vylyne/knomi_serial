@@ -85,6 +85,46 @@ def _module_version():
         return _FALLBACK_VERSION
 
 
+def encode_state(state):
+    """A PrinterState as the bytes that go on the wire, framing included.
+
+    Module level and public so scripts/simulate.py can drive a display with the
+    exact encoder Klipper uses. A second implementation would drift, and then a
+    bench test would be exercising the test rig rather than the firmware.
+    """
+    # The two trailing `s` fields pad with NULs and truncate on their own,
+    # which is exactly the fixed-width behaviour the device reads back.
+    return (
+        _HEADER
+        + struct.pack(
+            _STATE_FMT,
+            state.status.value,
+            state.working,
+            state.paused,
+            state.homed_x,
+            state.homed_y,
+            state.homed_z,
+            state.used,
+            state.active,
+            int(state.hotend_temp),
+            int(state.hotend_target),
+            int(state.bed_temp),
+            int(state.bed_target),
+            int(state.chamber_temp),
+            int(state.chamber_target),
+            int(state.mcu_temp),
+            int(state.mcu_target),
+            int(state.progress),
+            int(state.tool_number),
+            int(state.filament_color),
+            state.tram_type.value,
+            state.filament_type,
+            state.gcodes,
+        )
+        + _FOOTER
+    )
+
+
 def _normalize_tool(value):
     """`T0`, `t0` and `0` are the same tool.
 
@@ -619,40 +659,8 @@ class Knomi_Serial:
         if not self.serial or not self.serial.is_open:
             return
 
-        # The two trailing `s` fields pad with NULs and truncate on their own,
-        # which is exactly the fixed-width behaviour the device reads back.
-        msg = (
-            _HEADER
-            + struct.pack(
-                _STATE_FMT,
-                state.status.value,
-                state.working,
-                state.paused,
-                state.homed_x,
-                state.homed_y,
-                state.homed_z,
-                state.used,
-                state.active,
-                int(state.hotend_temp),
-                int(state.hotend_target),
-                int(state.bed_temp),
-                int(state.bed_target),
-                int(state.chamber_temp),
-                int(state.chamber_target),
-                int(state.mcu_temp),
-                int(state.mcu_target),
-                int(state.progress),
-                int(state.tool_number),
-                int(state.filament_color),
-                state.tram_type.value,
-                state.filament_type,
-                state.gcodes,
-            )
-            + _FOOTER
-        )
-
         try:
-            self.serial.write(msg)
+            self.serial.write(encode_state(state))
         except serial.SerialException as e:
             # Covers SerialTimeoutException, which is what _WRITE_TIMEOUT
             # produces when a screen stops draining its buffer.

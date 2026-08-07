@@ -1,5 +1,11 @@
 #include "overlay.h"
 
+// LVGL 9.3 made lv_hit_test_info_t opaque in the public headers. Unlike
+// LV_EVENT_COVER_CHECK, which grew lv_event_set_cover_res(), the hit test has
+// no public setter - the struct has to be written directly, so the private
+// header is the only way to reach `res`.
+#include <core/lv_obj_event_private.h>
+
 #include "board_conf.h"
 #include "printer/send/send_cmd.h"
 #include "ui/ui.h"
@@ -104,7 +110,7 @@ namespace ui
     void _arc_hit_handler(lv_event_t *e)
     {
       lv_obj_t *obj = (lv_obj_t *)lv_event_get_current_target(e);
-      lv_hit_test_info_t *info = (lv_hit_test_info_t *)lv_event_get_param(e);
+      lv_hit_test_info_t *info = lv_event_get_hit_test_info(e);
       if (lv_arc_get_bg_angle_end(obj) < 180)
       {
         info->res = info->point->x > RES_H - 30;

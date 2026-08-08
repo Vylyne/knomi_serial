@@ -8,17 +8,25 @@
 namespace ui {
 namespace estop_page {
 
-// One page, one control: hold to shut the machine down.
+// One page, one control: stop the machine where it stands.
 //
-// Replaces the STOP button that used to ride the overlay on every screen. That
-// button was one stray touch away at all times, and what it calls is
-// invoke_shutdown - motors off, firmware restart to recover - which is far too
-// much to hang off a brush against the glass. It was also compiled out in
-// toolchanger builds, so those had no emergency stop at all.
+// Not the same kind of thing as cancelling a print. Cancel is graceful - Klipper
+// finishes the move it is on, runs the cancel macro, parks. This kills the
+// service: invoke_shutdown, motors off wherever they happen to be, firmware
+// restart to recover. It exists to limit physical damage, so every moment
+// between deciding and stopping is a moment something is still moving.
 //
-// A page you swipe to, holding a control for a moment, is deliberate without
-// being slow. A confirmation dialogue would be the wrong shape: an emergency
-// stop should never be waiting for a second tap.
+// That is why it asks twice rather than being held. A hold reads as safer and
+// is slower precisely when slowness costs, and the second tap is the smallest
+// guard that still stops a brush against the glass from firing it.
+//
+// Replaces the STOP button that used to ride the overlay on every screen, one
+// stray touch away at all times. It was also inside a !TOOLCHANGER guard, so
+// toolchanger builds had no emergency stop of any kind.
+//
+// None of this is a substitute for a real one. A stop that travels display to
+// serial to host to MCU is a convenience that happens to be red; the machine's
+// actual emergency stop belongs on a latching switch that cuts power.
 lv_obj_t *init(lv_obj_t *parent, const printer::State &state);
 void printer_update(const printer::State &state);
 

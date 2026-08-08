@@ -21,17 +21,37 @@
 // With keys fitted, set CORNER_KEYS_TOUCH to 0: the symbols stay exactly where
 // they are and become legends for the keys instead of touch targets.
 #define CORNER_KEYS_TOUCH 1
-#define CORNER_SIZE 52
+// 38 on a 70 offset. At 52 on 62 the corner circle and the readout pill below
+// genuinely intersected - centres 24.8px apart against 39.5px of combined
+// radii. 70 is also the furthest the offset can go: a 19px radius at
+// 70*sqrt(2) from the middle puts the outer edge at 118 of the 120 available.
+#define CORNER_SIZE 38
+#define CORNER_OFFSET 70
 
-// How long the e-stop must be held. Long enough that a brush cannot fire it,
-// short enough to be no obstacle when meant. A hold, not a confirmation
-// dialogue - an emergency stop should never wait for a second tap.
-#define ESTOP_HOLD_MS 1500
+// The hit area is far larger than the mark. A legend should be small and quiet;
+// a target should be easy to hit with a gloved thumb. Decoupling them means
+// fitting physical keys removes only the region - the mark stays exactly where
+// it was, saying what the key beside it does.
+//
+// Sized and placed to collide with nothing: below the readout pill, inside the
+// band the side arcs no longer claim, and with a gap down the middle so the
+// bottom centre of the glass stays dead.
+#define CORNER_TOUCH_W 106
+#define CORNER_TOUCH_H 56
+#define CORNER_TOUCH_INSET 4
 
-// Cancelling a print asks twice, and forgets the first ask after this. Unlike
-// the e-stop this ends a job rather than the machine, so a moment to reconsider
-// is worth more than the speed is.
-#define CANCEL_CONFIRM_MS 3000
+// Left and right scroll only across the middle of the edge. Full height meant
+// the arcs swallowed any touch near the corners, including the keys there.
+#define SIDE_ARC_BAND_TOP 62
+#define SIDE_ARC_BAND_BOTTOM 178
+
+// Destructive controls ask twice and forget the first ask after this.
+//
+// Not a press-and-hold. A hold reads as safer but is slower exactly when speed
+// matters, and this is not the machine's real emergency stop in any case - that
+// belongs in hardware, on a latching switch that cuts power rather than asking
+// a display to ask a host to ask an MCU.
+#define CONFIRM_MS 3000
 
 // Overlay side indicators.
 #define SHOW_SIDE_ARCS 1

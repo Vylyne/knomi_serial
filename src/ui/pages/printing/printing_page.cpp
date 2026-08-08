@@ -144,15 +144,19 @@ static void _pause_handler(lv_event_t *e) {
 }
 
 // Two taps, because this ends a job. The first arms and says so by turning into
-// a tick; the second commits. Deliberately not the e-stop's press-and-hold - a
-// hold that goes wrong loses a print with no moment to reconsider, and unlike
-// an emergency stop there is no reason for this to be instant.
+// a tick; the second commits.
+//
+// This is the graceful one - Klipper finishes its move, runs the cancel macro
+// and parks - so nothing is gained by it being instant. The e-stop next door
+// asks twice as well, but for the opposite reason: it stops the machine where
+// it stands to limit damage, and is guarded as lightly as it can stand rather
+// than as heavily as it can bear.
 static void _cancel_handler(lv_event_t *e) {
   if (!_cancel_armed) {
     _cancel_armed = true;
     _show_cancel_state();
     if (!_cancel_timer) {
-      _cancel_timer = lv_timer_create(_disarm_cancel, CANCEL_CONFIRM_MS, nullptr);
+      _cancel_timer = lv_timer_create(_disarm_cancel, CONFIRM_MS, nullptr);
       lv_timer_set_repeat_count(_cancel_timer, 1);
     }
     return;

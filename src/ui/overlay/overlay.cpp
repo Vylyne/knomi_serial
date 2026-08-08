@@ -82,6 +82,17 @@ namespace ui
     {
       lv_obj_t *obj = (lv_obj_t *)lv_event_get_current_target(e);
       lv_hit_test_info_t *info = lv_event_get_hit_test_info(e);
+
+      // Only across the middle of the edge. These used to claim the full height
+      // of their side, which meant a touch anywhere near a corner scrolled the
+      // page instead of pressing the control sitting there.
+      if (info->point->y < SIDE_ARC_BAND_TOP ||
+          info->point->y > SIDE_ARC_BAND_BOTTOM)
+      {
+        info->res = false;
+        return;
+      }
+
       if (lv_arc_get_bg_angle_end(obj) < 180)
       {
         info->res = info->point->x > RES_H - 30;

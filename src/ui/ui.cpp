@@ -4,6 +4,7 @@
 
 #include "board_conf.h"
 #include "printer/printer.h"
+#include "ui/haze.h"
 #include "ui/overlay/overlay.h"
 #include "ui/screens/idle/idle_screen.h"
 #include "ui/screens/init/init_screen.h"
@@ -55,6 +56,9 @@ void update(const printer::State &state) {
   }
 
   if (_scr) {
+    // Before the page update, so a screen that has just been loaded is painted
+    // with the right heat before anything is drawn on top of it.
+    haze::apply(_scr, state);
     lv_obj_send_event(_scr, _lv_event_printer_update, (void*) &state);
   }
   lv_obj_send_event(_overlay, _lv_event_printer_update, (void*) &state);

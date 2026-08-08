@@ -76,12 +76,19 @@ namespace ui
       // should never sit behind a dark screen whatever the host believes.
       bool is_hot = _last_hotend_temp > SLEEP_HOT_THRESHOLD;
       bool in_job = _last_status == printer::Status::kPrinting && _last_used;
-      bool keep_awake = is_hot || in_job;
+      // A shutdown screen exists to say something went wrong. A dark one says
+      // nothing, so an alarm wakes the display whatever else is true.
+      bool alarm = _last_status == printer::Status::kShutdown;
+      bool keep_awake = is_hot || in_job || alarm;
 
-      // restore brightness if printer wakes up while dimmed
-      if (dimmed && keep_awake)
+      // Wake for the printer, not only for a finger. This tested `dimmed` alone,
+      // so once the screen had gone fully dark the only way back was a touch:
+      // the machine could start heating, begin a print, or shut down in front of
+      // a display that stayed off.
+      if ((sleeping || dimmed) && keep_awake)
       {
         display::set_backlight(DISPLAY_BRIGHTNESS);
+        sleeping = false;
         dimmed = false;
         last_active = millis();
       }

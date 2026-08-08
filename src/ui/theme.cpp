@@ -96,6 +96,13 @@ namespace ui
       return lv_color_make(last.r, last.g, last.b);
     }
 
+    lv_color_t heat_ink(int32_t temp, int32_t target)
+    {
+      // Lifted toward white rather than given its own stop table, so the two
+      // ramps cannot drift apart in hue - only in weight.
+      return lv_color_mix(lv_color_white(), heat(temp, target), HEAT_INK_LIFT);
+    }
+
     bool has_filament(const printer::State &state)
     {
       return state.filament_color != 0;

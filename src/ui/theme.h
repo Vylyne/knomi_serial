@@ -37,7 +37,19 @@ namespace ui
 
     //: Steel through amber to orange-red as `temp` closes on `target`.
     //: Steel when there is no target: nothing is being asked of the heater.
+    //:
+    //: Tuned for the haze, where it is mixed down toward black and wants depth
+    //: rather than brightness. Too dark to read as text - use heat_ink for that.
     lv_color_t heat(int32_t temp, int32_t target);
+
+    //: The same ramp lifted toward white, for text.
+    //:
+    //: A colour for an ambient gradient and a colour for a readout have
+    //: opposite requirements: the cool end of `heat` is a deep steel that gives
+    //: the glow somewhere to start from, and is barely legible at 16px on a
+    //: scrim. Brightening the one ramp would have made the haze glare, so there
+    //: are two.
+    lv_color_t heat_ink(int32_t temp, int32_t target);
 
     //: The loaded filament, or a neutral when the host has not said. Zero means
     //: unknown rather than black, so it must not render as black.

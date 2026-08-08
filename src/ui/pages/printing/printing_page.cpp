@@ -85,16 +85,16 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
 
   _scrim_sub = _init_scrim(page);
   _sub = lv_label_create(page);
-  lv_obj_set_style_text_font(_sub, &lv_font_montserrat_16, LV_PART_MAIN);
-  // 46, not 34: at 34 the two scrims met at the same pixel and read as one
-  // shape with a seam. This clears the percentage scrim by about 12px.
-  lv_obj_align(_sub, LV_ALIGN_CENTER, 0, 46);
+  lv_obj_set_style_text_font(_sub, &lv_font_montserrat_18, LV_PART_MAIN);
+  // 48, not 34: at 34 the two scrims met at the same pixel and read as one
+  // shape with a seam. This clears the percentage scrim by about 10px, with the
+  // taller 18px line accounted for.
+  lv_obj_align(_sub, LV_ALIGN_CENTER, 0, 48);
 
   // White throughout: the scrim guarantees the ground, so nothing has to be
   // chosen against the filament colour.
   lv_obj_set_style_text_color(_pct, lv_color_white(), LV_PART_MAIN);
   lv_obj_set_style_text_color(_sub, lv_color_white(), LV_PART_MAIN);
-  lv_obj_set_style_text_opa(_sub, LV_OPA_80, LV_PART_MAIN);
   lv_obj_set_style_text_color(_tool, lv_color_white(), LV_PART_MAIN);
   lv_obj_set_style_text_opa(_tool, LV_OPA_80, LV_PART_MAIN);
 
@@ -193,8 +193,9 @@ void printer_update(const printer::State &state) {
   // underneath, so even the cool end of the ramp stays legible.
   lv_obj_set_style_text_color(
       _sub,
-      state.hotend_target > 0 ? theme::heat(state.hotend_temp, state.hotend_target)
-                              : lv_color_white(),
+      state.hotend_target > 0
+          ? theme::heat_ink(state.hotend_temp, state.hotend_target)
+          : lv_color_white(),
       LV_PART_MAIN);
 
   if (state.tool_number >= 0) {
@@ -229,7 +230,7 @@ void printer_update(const printer::State &state) {
     } else {
       snprintf(widest, sizeof(widest), "888");
     }
-    _size_scrim(_scrim_sub, &lv_font_montserrat_16, widest, 12, 3, LV_ALIGN_CENTER, 46);
+    _size_scrim(_scrim_sub, &lv_font_montserrat_18, widest, 12, 3, LV_ALIGN_CENTER, 48);
   }
 
   if (lv_obj_has_flag(_tool, LV_OBJ_FLAG_HIDDEN)) {

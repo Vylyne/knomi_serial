@@ -56,6 +56,11 @@
 #define HEAT_HAZE_OPA 110
 #define HEAT_STEPS 24
 
+// How much white is mixed into the heat ramp when it is used as text, 0-255.
+// The glow's cool end is a deep steel that is close to unreadable at small
+// sizes; this lifts it without touching the haze.
+#define HEAT_INK_LIFT 90
+
 // Readouts sit on a scrim - a dark pill sized to the text - so they never have
 // to be legible against the filament colour directly. Black over black is a
 // no-op, so this is invisible until the fill is actually behind it. Raise it if

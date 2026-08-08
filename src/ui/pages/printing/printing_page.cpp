@@ -5,6 +5,8 @@
 #include <string.h>
 
 #include "board_conf.h"
+#include "printer/send/send_cmd.h"
+#include "ui/corner.h"
 #include "ui/theme.h"
 #include "user_conf.h"
 
@@ -20,6 +22,14 @@ static lv_obj_t *_dot_r = nullptr;
 static lv_obj_t *_scrim_pct = nullptr;
 static lv_obj_t *_scrim_sub = nullptr;
 static lv_obj_t *_scrim_tool = nullptr;
+static lv_obj_t *_key_pause = nullptr;
+static lv_obj_t *_key_cancel = nullptr;
+
+//: Cancel asks twice. This is the timer that forgets the first ask, so a stray
+//: tap cannot leave the control armed for the rest of the print.
+static lv_timer_t *_cancel_timer = nullptr;
+static bool _cancel_armed = false;
+static bool _paused = false;
 
 //: Remembers the material the sub-line scrim was last sized for, so it is
 //: measured again when the spool changes rather than on every packet.
@@ -30,6 +40,10 @@ static lv_obj_t *_scrim_tool = nullptr;
 //: a size at all.
 static char _sized_for[printer::kFilamentTypeMaxLen + 1] = {0};
 
+static void _pause_handler(lv_event_t *e);
+static void _cancel_handler(lv_event_t *e);
+static void _disarm_cancel(lv_timer_t *timer);
+static void _show_cancel_state();
 static lv_obj_t *_init_dot(lv_obj_t *parent);
 static lv_obj_t *_init_scrim(lv_obj_t *parent);
 static void _size_scrim(
@@ -110,8 +124,58 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   // scrim created three lines above never gets measured.
   _sized_for[0] = '\0';
 
+  // The two controls worth having during a print, at the two lower diagonals -
+  // which is where the physical keys go, so these are already in the right
+  // place to become their legends. Created last, so they sit over the fill and
+  // the scrims.
+  _paused = state.paused;
+  _cancel_armed = false;
+  _key_pause = corner::create(
+      page, corner::Slot::kSW, LV_SYMBOL_PAUSE, COLOR_PAUSE_BG, _pause_handler);
+  _key_cancel = corner::create(
+      page, corner::Slot::kSE, LV_SYMBOL_STOP, COLOR_CANCEL_BG, _cancel_handler);
+
   printer_update(state);
   return page;
+}
+
+static void _pause_handler(lv_event_t *e) {
+  printer::send::send_gcode(_paused ? "RESUME" : "PAUSE");
+}
+
+// Two taps, because this ends a job. The first arms and says so by turning into
+// a tick; the second commits. Deliberately not the e-stop's press-and-hold - a
+// hold that goes wrong loses a print with no moment to reconsider, and unlike
+// an emergency stop there is no reason for this to be instant.
+static void _cancel_handler(lv_event_t *e) {
+  if (!_cancel_armed) {
+    _cancel_armed = true;
+    _show_cancel_state();
+    if (!_cancel_timer) {
+      _cancel_timer = lv_timer_create(_disarm_cancel, CANCEL_CONFIRM_MS, nullptr);
+      lv_timer_set_repeat_count(_cancel_timer, 1);
+    }
+    return;
+  }
+  _cancel_armed = false;
+  _show_cancel_state();
+  printer::send::send_gcode("CANCEL_PRINT");
+}
+
+static void _disarm_cancel(lv_timer_t *timer) {
+  _cancel_timer = nullptr;
+  _cancel_armed = false;
+  _show_cancel_state();
+}
+
+static void _show_cancel_state() {
+  if (!_key_cancel) {
+    return;
+  }
+  corner::set(
+      _key_cancel,
+      _cancel_armed ? LV_SYMBOL_OK : LV_SYMBOL_STOP,
+      _cancel_armed ? COLOR_CONFIRM_BG : COLOR_CANCEL_BG);
 }
 
 static lv_obj_t *_init_scrim(lv_obj_t *parent) {
@@ -169,6 +233,14 @@ static lv_obj_t *_init_dot(lv_obj_t *parent) {
 }
 
 void printer_update(const printer::State &state) {
+  if (state.paused != _paused) {
+    _paused = state.paused;
+    corner::set(
+        _key_pause,
+        _paused ? LV_SYMBOL_PLAY : LV_SYMBOL_PAUSE,
+        _paused ? COLOR_RESUME_BG : COLOR_PAUSE_BG);
+  }
+
   lv_obj_set_style_bg_color(_fill, theme::filament(state), LV_PART_MAIN);
 
   int32_t pct = state.progress;

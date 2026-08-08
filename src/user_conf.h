@@ -17,6 +17,22 @@
 // How often to report firmware version and device state back to the host.
 #define REPORT_PERIOD_MS 2000
 
+// Corner controls sit at the four diagonals, where the physical keys are going.
+// With keys fitted, set CORNER_KEYS_TOUCH to 0: the symbols stay exactly where
+// they are and become legends for the keys instead of touch targets.
+#define CORNER_KEYS_TOUCH 1
+#define CORNER_SIZE 52
+
+// How long the e-stop must be held. Long enough that a brush cannot fire it,
+// short enough to be no obstacle when meant. A hold, not a confirmation
+// dialogue - an emergency stop should never wait for a second tap.
+#define ESTOP_HOLD_MS 1500
+
+// Cancelling a print asks twice, and forgets the first ask after this. Unlike
+// the e-stop this ends a job rather than the machine, so a moment to reconsider
+// is worth more than the speed is.
+#define CANCEL_CONFIRM_MS 3000
+
 // Overlay side indicators.
 #define SHOW_SIDE_ARCS 1
 
@@ -79,6 +95,8 @@
 #define COLOR_PAUSE_BG lv_color_hex(0xbaffc1)
 #define COLOR_RESUME_BG lv_color_hex(0xbaffe3)
 #define COLOR_CANCEL_BG lv_color_hex(0x900000)
+// Shown while a cancel is armed and waiting for its second tap.
+#define COLOR_CONFIRM_BG lv_color_hex(0xE04A32)
 #define COLOR_HOMED_BG lv_color_hex(0xffe3ba)
 
 // G-code screen colors.

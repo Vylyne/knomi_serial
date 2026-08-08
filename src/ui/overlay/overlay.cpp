@@ -22,11 +22,6 @@ namespace ui
 
     void _printer_update_handler(const printer::State &state);
 
-    // Blocking Stop Button in Toolchanger Mode
-#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
-    void _stop_click_handler(lv_event_t *e);
-#endif
-
     void _right_click_handler(lv_event_t *e);
     void _left_click_handler(lv_event_t *e);
 
@@ -41,23 +36,6 @@ namespace ui
       // fill already says - on top of it, across the part of the screen the fill
       // is densest. The control page carries its own readout instead, which is
       // the only place the arc was still earning its keep.
-
-      // Blocking Stop Button in Toolchanger Mode
-#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
-      lv_obj_t *stop = lv_button_create(lv_layer_top());
-      lv_obj_set_size(stop, RES_H, 35);
-      lv_obj_align(stop, LV_ALIGN_BOTTOM_MID, 0, 0);
-      lv_obj_t *stop_label = lv_label_create(stop);
-      lv_label_set_text(stop_label, "STOP");
-      lv_obj_center(stop_label);
-      page_helper::set_button_color(stop, COLOR_STOP_BG);
-
-      lv_obj_add_event_cb(
-          stop,
-          _stop_click_handler,
-          LV_EVENT_CLICKED,
-          nullptr);
-#endif
 
       lv_obj_t *right = _init_arc(350, 10);
       lv_obj_add_event_cb(
@@ -127,14 +105,6 @@ namespace ui
       }
 
     }
-
-    // Blocking Stop Button in Toolchanger Mode
-#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
-    void _stop_click_handler(lv_event_t *e)
-    {
-      printer::send::send_stop();
-    }
-#endif
 
     void _right_click_handler(lv_event_t *e)
     {

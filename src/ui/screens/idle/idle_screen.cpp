@@ -1,6 +1,7 @@
 #include "idle_screen.h"
 
 #include "ui/screens/screen_helper.h"
+#include "ui/pages/estop/estop_page.h"
 #include "ui/pages/gcode/gcode_page.h"
 #include "ui/pages/home/home_page.h"
 #include "ui/pages/filament/filament_page.h"
@@ -31,6 +32,12 @@ namespace ui
       IDLE_PAGE_4::init(scr, state);
 #endif
 
+      // Last page on every screen. The emergency stop used to ride the overlay,
+      // one stray touch away at all times, and was compiled out of toolchanger
+      // builds entirely - so those had none at all. A page you swipe to is
+      // deliberate without being slow.
+      estop_page::init(scr, state);
+
       lv_obj_scroll_to_x(scr, IDLE_PAGE_START * 240, LV_ANIM_OFF);
 
       return scr;
@@ -45,6 +52,7 @@ namespace ui
       IDLE_PAGE_3::printer_update(state);
       IDLE_PAGE_4::printer_update(state);
 #endif
+      estop_page::printer_update(state);
     }
 
   }

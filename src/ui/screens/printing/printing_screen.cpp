@@ -17,6 +17,7 @@ lv_obj_t *init(const printer::State &state) {
   printing_page::init(scr, state);
   estop_page::init(scr, state);
 
+  screen_helper::tag_pages(scr);
   return scr;
 }
 

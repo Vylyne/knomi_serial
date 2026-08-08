@@ -6,6 +6,7 @@
 #include "printer/printer.h"
 #include "ui/haze.h"
 #include "ui/screens/idle/idle_screen.h"
+#include "ui/screens/screen_helper.h"
 #include "ui/screens/init/init_screen.h"
 #include "ui/screens/printing/printing_screen.h"
 #include "ui/screens/shutdown/shutdown_screen.h"
@@ -75,13 +76,11 @@ const char *screen_name() {
 }
 
 int page_index() {
-  if (!_scr) {
-    return 0;
-  }
-  // Pages are laid out side by side, one screen wide each, so the scroll
-  // position doubles as the page index. Round to the nearest page so a report
-  // landing mid-animation does not read as the page we just left.
-  return (lv_obj_get_scroll_x(_scr) + RES_H / 2) / RES_H;
+  // Asks which page is under the viewport, not where the viewport is. Wrapping
+  // reorders the row, so a slot number stopped identifying a page the moment
+  // the first rotation happened - and with re-centring it would now report the
+  // home slot forever while you swiped past everything on the device.
+  return screen_helper::visible_page(_scr);
 }
 
 namespace control {

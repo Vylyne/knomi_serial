@@ -24,36 +24,53 @@ void _stop_settle() {
   }
 }
 
+//: Where the page you are looking at is kept. One place in from the start, so
+//: there is always a page to its left and, with three or more, at least one to
+//: its right.
+const int32_t kHome = 1;
+
 void _rotate(lv_obj_t *scr, int32_t scroll) {
   uint32_t count = lv_obj_get_child_count(scr);
-  if (count < 2) {
+
+  // Two pages cannot wrap in both directions. Symmetry needs a page to the left
+  // and to the right, and with two the other one can occupy a side or the other
+  // but not both at once - that wants a second copy of it, and pages keep their
+  // widgets in file statics, so a copy would overwrite the original. Two pages
+  // fall back to ordinary bounded scrolling, which already reaches everything
+  // in one swipe each way.
+  if (count < 3) {
     return;
   }
 
   const int32_t page_w = RES_H;
   int32_t index = (scroll + page_w / 2) / page_w;
-
-  int32_t landed;
-  if (index <= 0) {
-    // Resting on the first page: bring the last one round to sit before it, so
-    // there is something to the left to swipe onto.
-    lv_obj_move_to_index(lv_obj_get_child(scr, count - 1), 0);
-    landed = index + 1;
-  } else if (index >= (int32_t)count - 1) {
-    lv_obj_move_to_index(lv_obj_get_child(scr, 0), count - 1);
-    landed = index - 1;
-  } else {
+  int32_t shift = index - kHome;
+  if (shift == 0) {
     return;
   }
 
-  // Scroll to the page's new index exactly, not to "wherever we were plus a
-  // page". Reading the live position and adding to it was what left the row
-  // parked between two pages: LV_EVENT_SCROLL_END arrives while the snap
-  // animation is still easing, so that position is mid-flight, and scrolling
-  // with LV_ANIM_OFF deletes the snap animation on its way past.
+  // Re-centred after every settle, not only on reaching an end. Rotating only
+  // at the ends put a page on one side and left the other a wall: you swiped,
+  // bounced, waited for the rotation, and swiped again. Both neighbours are
+  // present before every gesture now.
+  if (shift > 0) {
+    for (int32_t i = 0; i < shift; i++) {
+      lv_obj_move_to_index(lv_obj_get_child(scr, 0), count - 1);
+    }
+  } else {
+    for (int32_t i = 0; i < -shift; i++) {
+      lv_obj_move_to_index(lv_obj_get_child(scr, count - 1), 0);
+    }
+  }
+
+  // Scroll to the home slot exactly, not to "wherever we were plus a page".
+  // Reading the live position and adding to it was what left the row parked
+  // between two pages: LV_EVENT_SCROLL_END arrives while the snap animation is
+  // still easing, so that position is mid-flight, and scrolling with
+  // LV_ANIM_OFF deletes the snap animation on its way past.
   _wrapping = true;
   lv_obj_update_layout(scr);
-  lv_obj_scroll_to_x(scr, landed * page_w, LV_ANIM_OFF);
+  lv_obj_scroll_to_x(scr, kHome * page_w, LV_ANIM_OFF);
   _wrapping = false;
 }
 
@@ -102,6 +119,38 @@ void _screen_deleted(lv_event_t *e) {
   _stop_settle();
 }
 
+}
+
+void tag_pages(lv_obj_t *scr) {
+  if (!scr) {
+    return;
+  }
+  uint32_t count = lv_obj_get_child_count(scr);
+  for (uint32_t i = 0; i < count; i++) {
+    // Offset by one so that zero keeps meaning "never stamped".
+    lv_obj_set_user_data(lv_obj_get_child(scr, i), (void *)(intptr_t)(i + 1));
+  }
+}
+
+int visible_page(lv_obj_t *scr) {
+  if (!scr) {
+    return 0;
+  }
+  uint32_t count = lv_obj_get_child_count(scr);
+  if (count == 0) {
+    return 0;
+  }
+
+  int32_t slot = (lv_obj_get_scroll_x(scr) + RES_H / 2) / RES_H;
+  if (slot < 0) {
+    slot = 0;
+  }
+  if (slot >= (int32_t)count) {
+    slot = (int32_t)count - 1;
+  }
+
+  intptr_t tag = (intptr_t)lv_obj_get_user_data(lv_obj_get_child(scr, slot));
+  return tag > 0 ? (int)(tag - 1) : (int)slot;
 }
 
 lv_obj_t *create_screen() {

@@ -1,5 +1,6 @@
 #include "idle_screen.h"
 
+#include "board_conf.h"
 #include "ui/screens/screen_helper.h"
 #include "ui/pages/estop/estop_page.h"
 #include "ui/pages/gcode/gcode_page.h"
@@ -38,7 +39,8 @@ namespace ui
       // deliberate without being slow.
       estop_page::init(scr, state);
 
-      lv_obj_scroll_to_x(scr, IDLE_PAGE_START * 240, LV_ANIM_OFF);
+      screen_helper::tag_pages(scr);
+      lv_obj_scroll_to_x(scr, IDLE_PAGE_START * RES_H, LV_ANIM_OFF);
 
       return scr;
     }

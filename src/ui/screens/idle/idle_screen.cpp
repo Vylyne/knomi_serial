@@ -19,9 +19,25 @@ namespace ui
 
     void _printer_update_handler(const printer::State &state);
 
+    //: Must be in the order the pages are built, because that is the order
+    //: tag_pages stamps them in and what update_visible indexes by.
+    const screen_helper::page_update_t _updates[] = {
+        IDLE_PAGE_0::printer_update,
+        IDLE_PAGE_1::printer_update,
+        IDLE_PAGE_2::printer_update,
+#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
+        IDLE_PAGE_3::printer_update,
+        IDLE_PAGE_4::printer_update,
+#endif
+        estop_page::printer_update,
+    };
+
+    lv_obj_t *_scr = nullptr;
+
     lv_obj_t *init(const printer::State &state)
     {
       lv_obj_t *scr = screen_helper::create_screen();
+      _scr = scr;
       control::register_printer_update_cb(scr, _printer_update_handler);
 
       IDLE_PAGE_0::init(scr, state);
@@ -47,14 +63,8 @@ namespace ui
 
     void _printer_update_handler(const printer::State &state)
     {
-      IDLE_PAGE_0::printer_update(state);
-      IDLE_PAGE_1::printer_update(state);
-      IDLE_PAGE_2::printer_update(state);
-#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
-      IDLE_PAGE_3::printer_update(state);
-      IDLE_PAGE_4::printer_update(state);
-#endif
-      estop_page::printer_update(state);
+      screen_helper::update_visible(
+          _scr, state, _updates, sizeof(_updates) / sizeof(_updates[0]));
     }
 
   }

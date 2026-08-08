@@ -3,6 +3,8 @@
 
 #include <lvgl.h>
 
+#include "printer/printer.h"
+
 namespace ui {
 namespace screen_helper {
 
@@ -45,6 +47,21 @@ void tag_pages(lv_obj_t *scr);
 //: The page under the viewport, by the identity stamped above rather than by
 //: where it currently sits in the row.
 int visible_page(lv_obj_t *scr);
+
+typedef void (*page_update_t)(const printer::State &);
+
+//: Update the page in view and the one either side of it, and no others.
+//:
+//: A screen used to hand every state change to every page it owned - four here,
+//: six without a toolchanger - so most of the text formatting and invalidation
+//: was for pages nobody could see. The neighbours are included so a page is
+//: current before it scrolls into view rather than after.
+//:
+//: `updates` is indexed by the identity tag_pages stamped, so it stays correct
+//: however the row has been rotated.
+void update_visible(
+    lv_obj_t *scr, const printer::State &state,
+    const page_update_t *updates, uint32_t count);
 
 }
 }

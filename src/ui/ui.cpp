@@ -19,6 +19,10 @@ static lv_event_code_t _lv_event_printer_update;
 static printer::Status _status = printer::Status::kDisconnected;
 static lv_obj_t *_scr = nullptr;
 
+//: Kept so a swipe can re-show the pages what they missed. A copy, not a
+//: reference: the original lives behind the receive task's mutex.
+static printer::State _last_state;
+
 void init() {
   lv_init();
   lv_tick_set_cb([]() { return (uint32_t) millis(); });
@@ -26,6 +30,8 @@ void init() {
 }
 
 void update(const printer::State &state) {
+  _last_state = state;
+
   scr_init_t next_scr_init = nullptr;
   if (state.status != _status || !_scr) {
     switch (state.status) {
@@ -55,6 +61,12 @@ void update(const printer::State &state) {
     // with the right heat before anything is drawn on top of it.
     haze::apply(_scr, state);
     lv_obj_send_event(_scr, _lv_event_printer_update, (void*) &state);
+  }
+}
+
+void refresh() {
+  if (_scr) {
+    lv_obj_send_event(_scr, _lv_event_printer_update, (void *)&_last_state);
   }
 }
 

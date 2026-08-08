@@ -1,6 +1,7 @@
 #include "screen_helper.h"
 
 #include "board_conf.h"
+#include "ui/ui.h"
 #include "user_conf.h"
 
 namespace ui {
@@ -17,11 +18,17 @@ bool _wrapping = false;
 //: user starts another, and if the screen it belongs to is deleted.
 lv_timer_t *_settle = nullptr;
 
+//: Counted here rather than left to lv_timer_set_repeat_count. LVGL deletes a
+//: timer itself once its repeat count runs out, which would leave the pointer
+//: above dangling for the next cancel to free a second time.
+int32_t _settle_ticks = 0;
+
 void _stop_settle() {
   if (_settle) {
     lv_timer_delete(_settle);
     _settle = nullptr;
   }
+  _settle_ticks = 0;
 }
 
 //: Where the page you are looking at is kept. One place in from the start, so
@@ -87,12 +94,21 @@ void _settle_tick(lv_timer_t *timer) {
   if (off > WRAP_SNAP_TOLERANCE && off < page_w - WRAP_SNAP_TOLERANCE) {
     // Still easing. LVGL snaps by at most one page, from mid-drag to a
     // boundary, so the only time this reads as aligned is when it has arrived.
+    if (++_settle_ticks < WRAP_SETTLE_TICKS) {
+      return;
+    }
+    // Never came to rest. Leave the row exactly as the user left it rather than
+    // rotating against a position that is still moving.
+    _stop_settle();
     return;
   }
 
-  _settle = nullptr;
-  lv_timer_delete(timer);
+  _stop_settle();
   _rotate(scr, scroll);
+
+  // The page that just arrived may not have been a neighbour when the state
+  // last changed, so show it what it missed.
+  refresh();
 }
 
 void _scroll_begin(lv_event_t *e) {
@@ -108,9 +124,9 @@ void _scroll_end(lv_event_t *e) {
   // Polled rather than delayed by a fixed amount: the snap runs anywhere from
   // 200 to 400ms, so a wait long enough to always be safe is long enough to be
   // felt between quick swipes.
+  _settle_ticks = 0;
   _settle = lv_timer_create(
       _settle_tick, WRAP_SETTLE_TICK_MS, (lv_obj_t *)lv_event_get_target(e));
-  lv_timer_set_repeat_count(_settle, WRAP_SETTLE_TICKS);
 }
 
 void _screen_deleted(lv_event_t *e) {
@@ -151,6 +167,35 @@ int visible_page(lv_obj_t *scr) {
 
   intptr_t tag = (intptr_t)lv_obj_get_user_data(lv_obj_get_child(scr, slot));
   return tag > 0 ? (int)(tag - 1) : (int)slot;
+}
+
+void update_visible(
+    lv_obj_t *scr, const printer::State &state,
+    const page_update_t *updates, uint32_t count) {
+  if (!scr || !updates) {
+    return;
+  }
+  uint32_t children = lv_obj_get_child_count(scr);
+  if (children == 0) {
+    return;
+  }
+
+  int32_t slot = (lv_obj_get_scroll_x(scr) + RES_H / 2) / RES_H;
+
+  for (int32_t offset = -1; offset <= 1; offset++) {
+    int32_t at = slot + offset;
+    if (at < 0 || at >= (int32_t)children) {
+      continue;
+    }
+    intptr_t tag = (intptr_t)lv_obj_get_user_data(lv_obj_get_child(scr, at));
+    if (tag <= 0 || (uint32_t)(tag - 1) >= count) {
+      continue;
+    }
+    page_update_t fn = updates[tag - 1];
+    if (fn) {
+      fn(state);
+    }
+  }
 }
 
 lv_obj_t *create_screen() {

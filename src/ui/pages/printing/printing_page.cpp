@@ -23,6 +23,11 @@ static lv_obj_t *_scrim_tool = nullptr;
 
 //: Remembers the material the sub-line scrim was last sized for, so it is
 //: measured again when the spool changes rather than on every packet.
+//:
+//: Cleared in init(). It outlives the object it describes - a status change
+//: reloads the screen and every scrim on it is built anew - so a cache left
+//: standing would report the fresh one as already sized and it would never get
+//: a size at all.
 static char _sized_for[printer::kFilamentTypeMaxLen + 1] = {0};
 
 static lv_obj_t *_init_dot(lv_obj_t *parent);
@@ -100,6 +105,11 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   _size_scrim(_scrim_pct, &lv_font_montserrat_48, "100%", 14, 4, LV_ALIGN_CENTER, -6);
   _size_scrim(_scrim_tool, &lv_font_montserrat_16, "T00", 26, 4, LV_ALIGN_TOP_MID, 30);
 
+  // The sub-line scrim is sized from the material, so it is the one printer_update
+  // owns. Forget what the previous incarnation of this page was showing, or the
+  // scrim created three lines above never gets measured.
+  _sized_for[0] = '\0';
+
   printer_update(state);
   return page;
 }
@@ -108,6 +118,11 @@ static lv_obj_t *_init_scrim(lv_obj_t *parent) {
   lv_obj_t *scrim = lv_obj_create(parent);
   lv_obj_remove_style_all(scrim);
   lv_obj_remove_flag(scrim, LV_OBJ_FLAG_SCROLLABLE);
+  // Start at nothing. An lv_obj defaults to LV_DPI_DEF square at the top-left
+  // corner, so a scrim that misses its sizing draws a large circle in the upper
+  // left rather than not drawing - which is how this went unnoticed. Failing
+  // invisibly is the right failure for a mask.
+  lv_obj_set_size(scrim, 0, 0);
   lv_obj_set_style_radius(scrim, LV_RADIUS_CIRCLE, LV_PART_MAIN);
   lv_obj_set_style_bg_color(scrim, lv_color_black(), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(scrim, SCRIM_OPA, LV_PART_MAIN);

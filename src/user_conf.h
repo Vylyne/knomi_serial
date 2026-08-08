@@ -33,11 +33,15 @@
 // fitting physical keys removes only the region - the mark stays exactly where
 // it was, saying what the key beside it does.
 //
-// Sized and placed to collide with nothing: below the readout pill, inside the
-// band the side arcs no longer claim, and with a gap down the middle so the
-// bottom centre of the glass stays dead.
+// Square, because the glass is round: a short wide box hugs the bottom edge,
+// where the circle has already curved away, and never reaches the mark sitting
+// up on the diagonal. Equal sides put the target under the symbol.
+//
+// It does now pass behind the readout. Nothing there is touchable, so the only
+// consequence is that a tap on the material or temperature counts as the
+// control on that side - and the gap down the middle keeps the centre dead.
 #define CORNER_TOUCH_W 106
-#define CORNER_TOUCH_H 56
+#define CORNER_TOUCH_H 106
 #define CORNER_TOUCH_INSET 4
 
 // Destructive controls ask twice and forget the first ask after this.
@@ -47,15 +51,6 @@
 // belongs in hardware, on a latching switch that cuts power rather than asking
 // a display to ask a host to ask an MCU.
 #define CONFIRM_MS 3000
-
-// Page wrapping waits for the row to come to rest before rotating it. LVGL's
-// snap takes 200-400ms and reports the scroll as ended while it is still
-// easing, so the position has to be watched rather than assumed. Polled, not
-// delayed by a fixed amount: a wait long enough to always be safe is long
-// enough to be felt between quick swipes.
-#define WRAP_SETTLE_TICK_MS 40
-#define WRAP_SETTLE_TICKS 18
-#define WRAP_SNAP_TOLERANCE 2
 
 // Idle screen page order.
 #define IDLE_PAGE_0 gcode_page

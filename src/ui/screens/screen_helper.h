@@ -16,24 +16,17 @@ namespace screen_helper {
 // side to be reachable - and so swallowed every touch near a corner, including
 // the controls that now live there. Removing them gave the edges back.
 //
-// The row wraps in both directions. After every page change the row is rotated
-// so the page you are on sits at a fixed slot with a neighbour either side -
-// rather than by duplicating anything, since pages hold their widgets in file
-// statics and a second copy of one would quietly overwrite the first.
+// The row does not wrap. It briefly did: pages were rotated after each settle
+// so the current one always had a neighbour either side. It worked, but the
+// idle screen read as laggy with it in and read fine without, and it was the
+// only screen rotating - the printing screen has two pages, which cannot wrap
+// symmetrically, and that screen got faster over the same period. Not worth
+// carrying an unexplained cost for a convenience.
 //
-// Re-centring every time, instead of only on reaching an end, is what makes it
-// symmetrical. Rotating at the ends alone puts a page on one side and leaves
-// the other a wall: swipe, bounce, wait for the rotation, swipe again.
-//
-// The rotation waits for the row to stop moving. LVGL reports a scroll as ended
-// while its snap animation is still easing, so acting on the position at that
-// moment both reads the wrong page and cancels the snap - which parked the row
-// between two pages.
-//
-// Three pages minimum. Symmetry needs a page to the left and to the right, and
-// with two the other one can be on a side or the other but not both. Two pages
-// keep ordinary bounded scrolling, which already reaches everything in one
-// swipe each way.
+// The row still remembers which page is which. tag_pages and visible_page look
+// redundant while nothing reorders, and are kept because the alternative -
+// inferring the page from the scroll offset - is what silently broke when
+// rotation existed, and would break again the same way.
 lv_obj_t *create_screen();
 
 //: Stamp each page with the position it was built in, once they all exist.

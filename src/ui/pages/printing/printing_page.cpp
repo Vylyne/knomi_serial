@@ -11,6 +11,7 @@
 namespace ui {
 namespace printing_page {
 
+static lv_obj_t *_haze = nullptr;
 static lv_obj_t *_fill = nullptr;
 static lv_obj_t *_pct = nullptr;
 static lv_obj_t *_sub = nullptr;
@@ -25,6 +26,15 @@ static lv_obj_t *_scrim_tool = nullptr;
 //: measured again when the spool changes rather than on every packet.
 static char _sized_for[printer::kFilamentTypeMaxLen + 1] = {0};
 
+//: Which rung of the heat ramp the haze is currently painted at, or -1 for
+//: never. Restyling a full-screen gradient invalidates the whole screen, and
+//: the hotend moves a degree or so per packet - repainting on every one would
+//: cost more than the entire rest of this page. Quantising to HEAT_STEPS turns
+//: a whole heat-up into a couple of dozen repaints instead of a couple of
+//: thousand, and nothing at all once the temperature settles.
+static int _haze_step = -1;
+
+static void _update_haze(const printer::State &state);
 static lv_obj_t *_init_dot(lv_obj_t *parent);
 static lv_obj_t *_init_scrim(lv_obj_t *parent);
 static void _size_scrim(
@@ -35,6 +45,20 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   lv_obj_t *page = lv_obj_create(parent);
   lv_obj_remove_style_all(page);
   lv_obj_set_size(page, RES_H, RES_V);
+
+  // Heat, as the air above the melt rather than as a number. A gradient rising
+  // from the bottom in the heat colour, behind the fill - so it shows in
+  // whatever the fill has not claimed yet, and a print that is nearly done has
+  // almost none of it left visible. Which is right: by then the interesting
+  // thing is the progress, not the nozzle.
+  _haze = lv_obj_create(page);
+  lv_obj_remove_style_all(_haze);
+  lv_obj_remove_flag(_haze, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_size(_haze, RES_H, RES_V);
+  lv_obj_center(_haze);
+  lv_obj_set_style_bg_color(_haze, lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_bg_grad_dir(_haze, LV_GRAD_DIR_VER, LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(_haze, LV_OPA_TRANSP, LV_PART_MAIN);
 
   // The fill is a plain rectangle rising from the bottom, with no circular
   // mask: the GC9A01 is a round panel, so pixels outside the inscribed circle
@@ -143,6 +167,40 @@ static void _size_scrim(
   }
 }
 
+static void _update_haze(const printer::State &state) {
+  // Anchored to the target, not to an absolute temperature: 60C on the way to
+  // 65 is nearly there, and 60C on the way to 250 has barely started. With no
+  // target there is nothing being asked of the heater, so there is no glow.
+  int step = 0;
+  if (state.hotend_target > 0) {
+    step = (int)((int32_t)state.hotend_temp * HEAT_STEPS / state.hotend_target);
+    if (step < 0) {
+      step = 0;
+    }
+    if (step > HEAT_STEPS) {
+      step = HEAT_STEPS;
+    }
+  }
+
+  if (step == _haze_step) {
+    return;
+  }
+  _haze_step = step;
+
+  if (step == 0) {
+    lv_obj_set_style_bg_opa(_haze, LV_OPA_TRANSP, LV_PART_MAIN);
+    return;
+  }
+
+  // Rebuilt from the rung rather than the raw temperature, so the colour lands
+  // on the same value the opacity did and the two cannot drift apart.
+  int32_t at = (int32_t)state.hotend_target * step / HEAT_STEPS;
+  lv_obj_set_style_bg_grad_color(
+      _haze, theme::heat(at, state.hotend_target), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(
+      _haze, (lv_opa_t)(HEAT_HAZE_OPA * step / HEAT_STEPS), LV_PART_MAIN);
+}
+
 static lv_obj_t *_init_dot(lv_obj_t *parent) {
   lv_obj_t *dot = lv_obj_create(parent);
   lv_obj_remove_style_all(dot);
@@ -154,6 +212,8 @@ static lv_obj_t *_init_dot(lv_obj_t *parent) {
 }
 
 void printer_update(const printer::State &state) {
+  _update_haze(state);
+
   lv_obj_set_style_bg_color(_fill, theme::filament(state), LV_PART_MAIN);
 
   int32_t pct = state.progress;
@@ -172,6 +232,15 @@ void printer_update(const printer::State &state) {
   } else {
     lv_label_set_text_fmt(_sub, "%d", (int)state.hotend_temp);
   }
+
+  // The readout takes the heat colour while something is being asked of the
+  // heater, and plain ink when nothing is. The scrim guarantees a dark ground
+  // underneath, so even the cool end of the ramp stays legible.
+  lv_obj_set_style_text_color(
+      _sub,
+      state.hotend_target > 0 ? theme::heat(state.hotend_temp, state.hotend_target)
+                              : lv_color_white(),
+      LV_PART_MAIN);
 
   if (state.tool_number >= 0) {
     lv_label_set_text_fmt(_tool, "T%d", (int)state.tool_number);

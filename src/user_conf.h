@@ -49,6 +49,13 @@
 // unknown filament and black filament are different facts.
 #define COLOR_FILAMENT_UNKNOWN 0x5A5A5A
 
+// Heat shows as a gradient rising behind the fill. Strength at target, and how
+// many rungs the ramp is quantised into - restyling the gradient invalidates
+// the whole screen, so it must not follow every degree. More rungs is smoother
+// and costs a full repaint each.
+#define HEAT_HAZE_OPA 110
+#define HEAT_STEPS 24
+
 // Readouts sit on a scrim - a dark pill sized to the text - so they never have
 // to be legible against the filament colour directly. Black over black is a
 // no-op, so this is invisible until the fill is actually behind it. Raise it if

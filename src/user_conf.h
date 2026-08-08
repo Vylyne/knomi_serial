@@ -48,6 +48,15 @@
 // a display to ask a host to ask an MCU.
 #define CONFIRM_MS 3000
 
+// Page wrapping waits for the row to come to rest before rotating it. LVGL's
+// snap takes 200-400ms and reports the scroll as ended while it is still
+// easing, so the position has to be watched rather than assumed. Polled, not
+// delayed by a fixed amount: a wait long enough to always be safe is long
+// enough to be felt between quick swipes.
+#define WRAP_SETTLE_TICK_MS 40
+#define WRAP_SETTLE_TICKS 18
+#define WRAP_SNAP_TOLERANCE 2
+
 // Idle screen page order.
 #define IDLE_PAGE_0 gcode_page
 #define IDLE_PAGE_1 temp_page

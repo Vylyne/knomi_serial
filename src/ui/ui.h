@@ -23,9 +23,6 @@ namespace control {
 
 void register_printer_update_cb(lv_obj_t *obj, printer_update_cb_t cb);
 
-void scroll_right();
-void scroll_left();
-
 }
 
 }

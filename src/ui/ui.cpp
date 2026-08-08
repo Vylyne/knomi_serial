@@ -5,7 +5,6 @@
 #include "board_conf.h"
 #include "printer/printer.h"
 #include "ui/haze.h"
-#include "ui/overlay/overlay.h"
 #include "ui/screens/idle/idle_screen.h"
 #include "ui/screens/init/init_screen.h"
 #include "ui/screens/printing/printing_screen.h"
@@ -18,7 +17,6 @@ static lv_event_code_t _lv_event_printer_update;
 
 static printer::Status _status = printer::Status::kDisconnected;
 static lv_obj_t *_scr = nullptr;
-static lv_obj_t *_overlay = nullptr;
 
 void init() {
   lv_init();
@@ -27,10 +25,6 @@ void init() {
 }
 
 void update(const printer::State &state) {
-  if (!_overlay) {
-    _overlay = overlay::init(state);
-  }
-
   scr_init_t next_scr_init = nullptr;
   if (state.status != _status || !_scr) {
     switch (state.status) {
@@ -61,7 +55,6 @@ void update(const printer::State &state) {
     haze::apply(_scr, state);
     lv_obj_send_event(_scr, _lv_event_printer_update, (void*) &state);
   }
-  lv_obj_send_event(_overlay, _lv_event_printer_update, (void*) &state);
 }
 
 const char *screen_name() {
@@ -102,26 +95,6 @@ void register_printer_update_cb(lv_obj_t *obj, printer_update_cb_t cb) {
       _lv_event_printer_update,
       (void*) cb
   );
-}
-
-void scroll_right() {
-  if (_scr) {
-    int32_t scroll_by = -lv_obj_get_scroll_right(_scr);
-    if (scroll_by < -RES_H) {
-      scroll_by = -RES_H;
-    }
-    lv_obj_scroll_by(_scr, scroll_by, 0, LV_ANIM_ON);
-  }
-}
-
-void scroll_left() {
-  if (_scr) {
-    int32_t scroll_by = lv_obj_get_scroll_left(_scr);
-    if (scroll_by > RES_H) {
-      scroll_by = RES_H;
-    }
-    lv_obj_scroll_by(_scr, scroll_by, 0, LV_ANIM_ON);
-  }
 }
 
 void _printer_update_cb(lv_event_t *e) {

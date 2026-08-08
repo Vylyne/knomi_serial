@@ -40,11 +40,6 @@
 #define CORNER_TOUCH_H 56
 #define CORNER_TOUCH_INSET 4
 
-// Left and right scroll only across the middle of the edge. Full height meant
-// the arcs swallowed any touch near the corners, including the keys there.
-#define SIDE_ARC_BAND_TOP 62
-#define SIDE_ARC_BAND_BOTTOM 178
-
 // Destructive controls ask twice and forget the first ask after this.
 //
 // Not a press-and-hold. A hold reads as safer but is slower exactly when speed
@@ -52,9 +47,6 @@
 // belongs in hardware, on a latching switch that cuts power rather than asking
 // a display to ask a host to ask an MCU.
 #define CONFIRM_MS 3000
-
-// Overlay side indicators.
-#define SHOW_SIDE_ARCS 1
 
 // Idle screen page order.
 #define IDLE_PAGE_0 gcode_page
@@ -108,7 +100,6 @@
 
 // Overlay colors.
 #define COLOR_STOP_BG lv_color_hex(0x900000)
-#define COLOR_SIDE_ARC lv_color_hex(0x444444)
 
 // Button colors.
 #define COLOR_BTN_BG lv_color_hex(0xffbaf8)

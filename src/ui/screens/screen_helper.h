@@ -3,23 +3,25 @@
 
 #include <lvgl.h>
 
-#include "user_conf.h"
-
 namespace ui {
 namespace screen_helper {
 
-inline lv_obj_t *create_screen() {
-  lv_obj_t *scr = lv_obj_create(nullptr);
-  lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_OFF);
-  lv_obj_add_flag(scr, LV_OBJ_FLAG_SCROLL_ONE);
-  lv_obj_set_scroll_dir(scr, LV_DIR_HOR);
-  lv_obj_set_scroll_snap_x(scr, LV_SCROLL_SNAP_CENTER);
-  lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(scr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-  lv_obj_set_style_pad_column(scr, 0, LV_PART_MAIN);
-  lv_obj_set_style_bg_color(scr, COLOR_BG, LV_PART_MAIN);
-  return scr;
-}
+// A screen is a row of full-width pages you swipe between, snapping one at a
+// time.
+//
+// Swiping is the only way through them. There used to be a pair of tap arcs at
+// the left and right edges as well, which had to claim the full height of their
+// side to be reachable - and so swallowed every touch near a corner, including
+// the controls that now live there. Removing them gave the edges back.
+//
+// The row wraps: swipe past the last page and the first comes round. Done by
+// moving a page from one end of the row to the other and shifting the scroll to
+// match, rather than by duplicating anything - pages hold their widgets in file
+// statics, so a second copy of one would quietly overwrite the first.
+//
+// Needs three pages or more. With two, the page you land on is simultaneously
+// first and last, and the row would rotate forever.
+lv_obj_t *create_screen();
 
 }
 }

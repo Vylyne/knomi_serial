@@ -1,26 +1,26 @@
 # Knomi_Serial
 
-### Acknowledgement
+**Alternative firmware for the BTT Knomi V2 and similar round displays, which
+replaces the network-reliant Moonraker connection with a direct serial link to
+the Klipper host.**
 
-This is a fork of [ruiqimao/zerod](https://github.com/ruiqimao/zerod). I forked this update so I could compile it and I'm tweaking it for my own personal use with a toolchanger
+No WiFi, no IP address, no Moonraker. The display is a USB device on the Klipper
+machine, and a `klippy_extras` module talks to it directly.
 
-## Round display for klipper printers
+| Waiting | Heating | Tool, at temperature | Printing | Shutdown |
+| :---: | :---: | :---: | :---: | :---: |
+| <img src="docs/img/waiting.png" width="130"> | <img src="docs/img/heating.png" width="130"> | <img src="docs/img/idle.png" width="130"> | <img src="docs/img/printing.png" width="130"> | <img src="docs/img/shutdown.png" width="130"> |
 
-Knomi_Serial is an alternative firmware for the BTT Knomi V2 and other similar displays that replaces the
-network-reliant Moonraker connection with a direct serial connection to the Klipper host.
+Colour carries three separate things and never mixes them.
 
-| Tool, at temperature | Heating | Printing | Shutdown |
-| :---: | :---: | :---: | :---: |
-| <img src="docs/img/idle.png" width="150"> | <img src="docs/img/heating.png" width="150"> | <img src="docs/img/printing.png" width="150"> | <img src="docs/img/shutdown.png" width="150"> |
-
-Colour carries three separate things and never mixes them. The filament is
-whatever the slicer loaded, and it is the fill that rises with progress — its
-surface moving with the extruder, so the screen says the machine is *working*
-and not merely part-way through. Heat is a gradient behind everything, anchored
-to the target rather than to a temperature: 60°C on the way to 65 is nearly
-there, 60°C on the way to 250 has barely started. The machine's own accent —
-pink here, yours in `printer.cfg` — is reserved for chrome that is about the
-printer rather than the print.
+**Filament** is whatever the slicer loaded — the purple above — and it is the
+fill that rises with progress, its surface moving with the extruder so the
+screen says the machine is *working* rather than merely part-way through.
+**Heat** is a gradient behind everything, anchored to the target rather than to
+a temperature: 60 °C on the way to 65 is nearly there, 60 °C on the way to 250
+has barely started. The **machine's own accent** — the pink dots either side of
+`T0`, and yours to change in `printer.cfg` — is reserved for chrome that is
+about the printer rather than about the print.
 
 <img src="docs/img/stale.png" width="120" align="right">
 
@@ -33,22 +33,41 @@ to be current, and lets the screen sleep on its normal timers again.
 
 <br clear="right">
 
-Every shot above is a real capture, pulled off the glass over the serial link:
+## Scope, and what is finished
 
+This fork is developed **toolchanger-first**: several displays on one printer,
+one per tool, coordinated by a single Klipper module so that the state they
+share is computed once rather than once per screen. That is the case the design
+is worked out against.
+
+Single-toolhead machines are supported and are the default build, but they are
+the secondary target, and it shows. The two pages that only exist in that build
+— `home` and `move` — have not been brought into the same design language as the
+rest yet. They work; they look like the firmware this was forked from.
+
+| | |
+| --- | --- |
+| Tool page, G-code page, printing screen, e-stop | current design |
+| Home and move pages | inherited, not yet reworked |
+| Corner keys as touch targets | working |
+| Corner keys read from the display's own GPIO | not implemented — see below |
+
+## Installation
+
+Build and flash with [PlatformIO](https://platformio.org/):
+
+```bash
+pio run -e knomi -t upload                # single toolhead
+pio run -e knomi_toolchanger -t upload    # toolchanger build
 ```
-python scripts/screenshot.py COM5 --drive printing -o docs/img/printing.png
-```
 
-### Installation
+The Klipper module is installed by running `install.sh` on the Klipper host. It
+symlinks rather than copies, so `git pull` updates the module too.
 
-Knomi_Serial firmware can be built and flahsed using [PlatformIO](https://platformio.org/).
+## Klipper configuration
 
-An additional Klipper module is needed to enable the Knomi_Serial configuration options, which can be
-installed by running the included `install.sh` script on the Klipper host.
-
-### Klipper configuration
 ```ini
-[knomi_serial T0_knomi] # both a named device like this or a single like [knomi_serial] are available.
+[knomi_serial T0_knomi]  # a named device like this, or a bare [knomi_serial]
 serial:  # Path to the serial port for the Knomi_Serial device.
 tool:    # Which tool this screen belongs to, e.g. T0. Optional; needed only for
          # KNOMI_TOOL to address this screen. `T0`, `t0` and `0` are equivalent.
@@ -60,21 +79,26 @@ heater_bed: heater_bed   # Name of the bed heater.
 heater_chamber:  # Name of the chamber heater.
 sensor_chamber:  # Name of the chamber thermistor.
 
-move_x: 10  # Number of millimeters to move the toolhead in the positive X direction.
-move_y: 10  # Number of millimeters to move the toolhead in the positive Y direction.
-move_z: 10  # Number of millimeters to move the toolhead in the positive Z direction.
+sensor_mcu:  # Name of an MCU temperature sensor. Reported in get_status.
+
+move_x: 10  # Millimetres to move the toolhead in the positive X direction.
+move_y: 10
+move_z: 10
 
 speed_x: 100  # Speed to move the toolhead in the X direction.
-speed_y: 100  # Speed to move the toolhead in the Y direction.
-speed_z: 100  # Speed to move the toolhead in the Z direction.
+speed_y: 100
+speed_z: 100
 
-gcodes:  # Comma separated G-Codes to display on the Knomi_Serial device.
+gcodes:  # Comma separated G-Codes to show on the G-code page.
+```
 
-# Appearance and sleep. Every one of these is optional, and anything left out
-# keeps the value the firmware was compiled with in src/user_conf.h - so setting
-# one here overrides that default rather than replacing the whole set. They are
-# pushed to the screen once and survive a reflash, which the firmware's own
-# defaults do not.
+### Appearance and sleep
+
+Every one of these is optional. Anything left out keeps the value the firmware
+was compiled with in `src/user_conf.h` — setting one here **overrides** that
+default rather than replacing the whole set.
+
+```ini
 color_machine:           # The printer's own accent, RRGGBB. Default FFA7C4.
 color_filament_unknown:  # Shown when the host has not said what is loaded.
                          # Deliberately not black - unknown filament and black
@@ -83,38 +107,67 @@ brightness:      # Backlight level, 0-16. Default 8.
 dim_brightness:  # Level once dimmed. Default 3.
 dim_time:        # Seconds idle before dimming. Default 30.
 sleep_time:      # Seconds idle before the backlight goes out. Default 60.
-                 # A screen never sleeps while its tool is in the job or while
-                 # the nozzle is hot - see KNOMI_TOOL. Those are claims about
-                 # the machine, so a link that has gone quiet stops making them
-                 # and the normal timers resume.
-
-hardware_keys:   # Corners with a switch behind them, from NW NE SW SE. Listing
-                 # one keeps its symbol as a legend and removes its touch
-                 # target: a switch wired to the display, or a [gcode_button]
-                 # on the host, already reports that press, and two ways to
-                 # fire one action - one of them invisible - is a way to fire
-                 # it by accident. Default is none, so every corner is a soft
-                 # key and a bare display is fully usable.
-                 # e.g. hardware_keys: NW, NE
 ```
 
 These reach the device over the config channel, which it asks for whenever what
-it holds stops matching what the host has. Editing them and restarting Klipper is
-enough; there is nothing to reflash and nothing to power-cycle.
+it holds stops matching what the host has. Editing them and restarting Klipper
+is enough — there is nothing to reflash and nothing to power-cycle, and they
+survive a reflash where the firmware's own defaults do not.
 `printer["knomi_serial T0_knomi"].config_applied` says whether the screen is
-actually running what was sent. See [docs/protocol.md](docs/protocol.md).
+actually running what was sent.
 
-### Telling the screens about the job
+## The corner keys
+
+Four controls sit on the diagonals, where a round layout has room to spare and
+where physical keys can go. The lower pair is context-aware — load and unload on
+the tool page, pause and cancel while printing — and the upper pair is reserved
+for feed and retract, which on this machine are wired to the filament buffer and
+work with the host down.
+
+By default all four are **soft keys**: the glass is the button, and a bare
+display needs no wiring to be fully usable.
+
+```ini
+hardware_keys: NW, NE   # any of NW NE SW SE, comma or space separated
+```
+
+Listing a corner keeps its symbol exactly where it is, as a **legend**, and
+removes its touch target. Nothing on screen moves in that transition, which is
+the point of putting the soft keys on the diagonals first — the positions are
+learned before the hardware arrives.
+
+**This option does not define pins.** It only tells the display to stop offering
+an action that something else already reports. Where the pin is declared depends
+on which board the switch is wired to:
+
+- **To the Klipper host.** Declare it as a standard Klipper
+  [`[gcode_button]`](https://www.klipper3d.org/Config_Reference.html#gcode_button)
+  with its own `pin:` and `press_gcode:`. Klipper reads the switch; the display
+  just stops duplicating it.
+- **To the display itself.** Not implemented yet. Every free GPIO on the Knomi
+  V2 sits behind the unpopulated U10 camera FPC, which needs a breakout before
+  anything can be soldered — see [docs/hardware.md](docs/hardware.md) for the
+  pin map, the four pins worth using, and the two that will bite you.
+
+## Telling the screens about the job
 
 ```
 KNOMI_TOOL TOOL=0 [USED=1] [COLOR=FF8800] [TYPE=PLA]
 ```
 
+| Parameter | Value | If omitted |
+| --- | --- | --- |
+| `TOOL` | Which screen, matched against its `tool:`. `T0`, `t0` and `0` are equivalent. | **Required** |
+| `USED` | `0` or `1` — whether the running job uses this tool. Decides whether the screen sleeps. | Unchanged |
+| `COLOR` | Filament colour as `RRGGBB`, leading `#` allowed. Empty clears it back to unknown. | Unchanged |
+| `TYPE` | Material name, up to 15 characters. | Unchanged |
+
 `USED` is what decides whether a screen sleeps. The host is *told* which tools a
 job uses rather than inferring it from nozzle temperature, because temperature
 cannot separate a docked tool still in the job from one that is merely warm from
-the chamber — with ooze prevention dropping a docked tool by 100°C, and a chamber
-at 60°C, those two sit close enough together that no threshold splits them.
+the chamber — with ooze prevention dropping a docked tool by 100 °C, and a
+chamber at 60 °C, those two sit close enough together that no threshold splits
+them.
 
 Every parameter except `TOOL` is optional, so one fact can be changed without
 restating the others, and the command is safe to repeat. That makes mid-job
@@ -135,16 +188,29 @@ clean, and it defaults to true on startup — a module restart mid-print must no
 black out every screen. Filament colour and type deliberately survive a print
 ending, because the spool is still in the tool.
 
-`SLEEP_HOT_THRESHOLD` remains as a safety net only: a hot nozzle keeps its screen
-lit whatever the host believes. It has to sit **above chamber temperature**, or a
-tool idling at chamber heat reads as busy and the screen never sleeps at all.
+### When a screen stays awake
 
-### Status reference
+A screen refuses to sleep while any of these hold:
 
-The device reports its own state back over the same serial link every two seconds
-(`REPORT_PERIOD_MS` in `src/user_conf.h`), so it is available to macros and to the
-Moonraker API as `printer["knomi_serial T0_knomi"]` (or `printer.knomi_serial` for an
-unnamed section):
+- its tool is part of the running job (`USED`, above);
+- Klipper has shut down, because a dark screen cannot report a fault;
+- **or its nozzle is hotter than `SLEEP_HOT_THRESHOLD`.**
+
+That last one is a compile-time safety net in **`src/user_conf.h`**, not a
+`printer.cfg` option and not a `KNOMI_TOOL` parameter — a hot nozzle keeps its
+screen lit whatever the host believes. It defaults to 80 °C and has to sit
+**above chamber temperature**, or a tool idling at chamber heat reads as busy
+and the screen never sleeps at all.
+
+All three are claims about the machine, so a link that has gone quiet stops
+making them and the normal timers resume.
+
+## Status reference
+
+The device reports its own state back over the same serial link every two
+seconds (`REPORT_PERIOD_MS` in `src/user_conf.h`), so it is available to macros
+and to the Moonraker API as `printer["knomi_serial T0_knomi"]` (or
+`printer.knomi_serial` for an unnamed section):
 
 | Field | Description |
 | --- | --- |
@@ -152,6 +218,7 @@ unnamed section):
 | `port` | Configured serial path. |
 | `module_version` | Version of this Klipper module. |
 | `protocol_version` | Wire format version this module speaks. |
+| `config_crc` | CRC32 of the config this module is holding. |
 | `tool` | Normalised `tool:` value, e.g. `0`. `None` if unset. |
 | `used` | Whether the running job uses this tool. |
 | `filament_color` | Loaded filament colour as `RRGGBB`, or `None`. |
@@ -161,6 +228,8 @@ unnamed section):
 | `firmware_version` | Version actually flashed on the device. |
 | `device_protocol_version` | Wire format version the device speaks. |
 | `protocol_match` | Whether the two protocol versions agree. |
+| `device_config_crc` | CRC32 of the config the device is actually running. |
+| `config_applied` | Whether the device is running what was sent. |
 | `build_variant` | `knomi` or `knomi_toolchanger`. |
 | `sleep_state` | `awake`, `dim`, or `off`. |
 | `screen` | `init`, `idle`, `printing`, or `shutdown`. |
@@ -168,15 +237,17 @@ unnamed section):
 | `free_heap` / `min_free_heap` | Current and lowest-ever free heap, bytes. |
 | `device_uptime` | Seconds since the device booted. |
 
-Every device-side field is `None` until the first report arrives, so a device running
-firmware older than this feature reads as `device_online: False` with a `None` version.
+Every device-side field is `None` until the first report arrives, so a device
+running firmware older than this feature reads as `device_online: False` with a
+`None` version.
 
-### Testing the display without printing
+## Testing the display without printing
 
 `scripts/simulate.py` drives a display with made-up state over USB, so UI work
 does not need a printer — or even Klipper. It builds packets with
-`knomi_serial.encode_state`, the same encoder the module uses, so the screen sees
-byte-for-byte what it sees in service.
+`knomi_serial.encode_state`, the same encoder the module uses, so the screen
+sees byte-for-byte what it sees in service, and it answers the commands the
+display sends back so the buttons actually do things.
 
 ```bash
 pip install pyserial
@@ -188,27 +259,59 @@ python scripts/simulate.py COM7 --cycle-colours      # step through filaments
 python scripts/simulate.py COM7 --no-used            # should dim, then sleep
 ```
 
-With nothing pinned it loops cold → heating → printing 0–100% → finished, ramping
-temperatures rather than jumping them so the heat colour visibly crosses steel to
-amber. Pin any value and it stops moving: `--progress 54` parks the fill right at
-the ink crossover, which is where black-versus-white text is worth checking
-against a real panel.
+With nothing pinned it loops cold → heating → printing 0–100% → finished,
+ramping temperatures rather than jumping them so the heat colour visibly crosses
+steel to amber. Pin any value and it stops moving: `--progress 54` parks the
+fill right at the ink crossover, which is where black-versus-white text is worth
+checking against a real panel.
 
-`--cycle-colours` walks the presets, which deliberately include the awkward cases
-— white and yellow, where the ink must flip to black; true black, where it must
-not; and a pink close enough to the machine accent to check identity survives it.
-
-Whatever the display reports back is printed as it arrives, so a protocol
-mismatch shows up immediately rather than as a screen full of garbage.
+`--cycle-colours` walks the presets, which deliberately include the awkward
+cases — white and yellow, where the ink must flip to black; true black, where it
+must not; and a pink close enough to the machine accent to check identity
+survives it.
 
 **Stop Klipper first** if the display is wired to a running host. Both would be
 writing to the same port and the screen would see interleaved packets.
 
-### Versioning
+### Screenshots
 
-The canonical version is the `VERSION` file at the repo root. `scripts/version.py` runs
-before each build and compiles it into the firmware, appending semver build metadata
-when the tree is not a clean release build:
+Every image in this README is a real capture pulled off the glass over the same
+serial link — the display has no network, no filesystem and no second port.
+
+```bash
+python scripts/screenshot.py COM5 --drive printing -o docs/img/printing.png
+python scripts/screenshot.py COM5 -o now.png     # whatever is on screen now
+```
+
+About fourteen seconds a frame. `--drive` feeds the display a state first, so a
+documentation shot does not depend on catching the printer in the right mood.
+See [docs/protocol.md](docs/protocol.md) for how it works.
+
+### Checks
+
+```bash
+python tests/test_protocol.py   # firmware and module agree about the wire
+ruff check .                    # Python lint
+pio run -e knomi -e knomi_toolchanger
+```
+
+All three run in CI on every push and pull request. The protocol test is the one
+worth having: the firmware's `static_assert`s pin the packet layout, but only
+against other C++, and nothing else compares it against the Python that has to
+produce those bytes. A field added to `struct State` without a matching change
+to `_STATE_FMT` compiles clean, installs clean, and produces a display reading
+every field from the wrong offset. The test reads the constants out of
+`printer.h` and fails if the two sides have drifted.
+
+Both firmware variants are built, because the toolchanger build compiles out two
+pages behind an `#if` and it is entirely possible to break only the build nobody
+ran.
+
+## Versioning
+
+The canonical version is the `VERSION` file at the repo root. `scripts/version.py`
+runs before each build and compiles it into the firmware, appending semver build
+metadata when the tree is not a clean release build:
 
 ```
 0.4.0                    clean tree, tagged v0.4.0
@@ -217,15 +320,33 @@ when the tree is not a clean release build:
 0.4.0+gd34db33           no matching tag
 ```
 
-The Klipper module reads the same `VERSION` file, which works because `install.sh`
-symlinks it into `klippy/extras` rather than copying it.
+The Klipper module reads the same `VERSION` file, which works because
+`install.sh` symlinks it into `klippy/extras` rather than copying it.
 
-To cut a release: bump `VERSION`, commit, then `git tag -a v0.4.0 -m 0.4.0`. Moonraker's
-update manager infers the repo version from that tag on its own — it needs at least one
-tag in `vX.Y.Z` form, and no manifest file in this repo. Comparing the tag Moonraker
-reports against `firmware_version` above is what tells you the device is due a reflash.
+To cut a release: bump `VERSION`, commit, then `git tag -a v0.4.0 -m 0.4.0`.
+Moonraker's update manager infers the repo version from that tag on its own — it
+needs at least one tag in `vX.Y.Z` form, and no manifest file in this repo.
+Comparing the tag Moonraker reports against `firmware_version` above is what
+tells you the device is due a reflash.
 
 `printer::kProtoVersion` (`src/printer/printer.h`) and `_PROTO_VERSION`
-(`klippy_extras/knomi_serial.py`) are separate from the release version and are bumped
-only when the `State` packet layout changes. A mismatch is logged once to `klippy.log`
-and surfaced as `protocol_match: False`.
+(`klippy_extras/knomi_serial.py`) are separate from the release version and are
+bumped only when a wire format changes. A mismatch is logged once to
+`klippy.log` and surfaced as `protocol_match: False`.
+[docs/protocol.md](docs/protocol.md) describes the wire format;
+`tests/test_protocol.py` fails the build if the two sides disagree about it.
+
+## Acknowledgements
+
+- **[Klipper](https://www.klipper3d.org/)**, by Kevin O'Connor and its
+  contributors. This firmware is a client of it and would have nothing to
+  display without it. The Klipper module here follows its `klippy_extras`
+  conventions throughout.
+- **[ruiqimao/zerod](https://github.com/ruiqimao/zerod)**, which this is a fork
+  of, and which established the serial-instead-of-Moonraker approach the whole
+  project rests on.
+- **[BIGTREETECH](https://github.com/bigtreetech/Knomi-V2)** for the Knomi V2
+  hardware and for publishing its schematic, without which
+  [docs/hardware.md](docs/hardware.md) would be guesswork.
+- **[LVGL](https://lvgl.io/)** and
+  **[TFT_eSPI](https://github.com/Bodmer/TFT_eSPI)**, which do the drawing.

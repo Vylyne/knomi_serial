@@ -16,6 +16,8 @@ void _restart_click_handler(lv_event_t *e);
 lv_obj_t *init(const printer::State &state) {
   lv_obj_t *scr = lv_obj_create(nullptr);
   lv_obj_set_style_bg_color(scr, COLOR_BG, LV_PART_MAIN);
+  // See init_screen: a bare screen is scrollable and drags under a thumb.
+  lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
   control::register_printer_update_cb(scr, _printer_update_handler);
 
   lv_obj_t *title = lv_label_create(scr);
@@ -23,10 +25,11 @@ lv_obj_t *init(const printer::State &state) {
   lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 15);
 
   _message = lv_label_create(scr);
+  lv_label_set_long_mode(_message, LV_LABEL_LONG_WRAP);
   lv_label_set_text(_message, "");
   lv_obj_set_width(_message, 180);
   lv_obj_align(_message, LV_ALIGN_CENTER, 0, -25);
-  lv_obj_set_style_text_align(_message, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
+  lv_obj_set_style_text_align(_message, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
 
   _restart = page_helper::create_center_button(
     scr,

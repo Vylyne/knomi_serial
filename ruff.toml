@@ -1,0 +1,41 @@
+# Lint settings for the Python half of the project: the Klipper module, the
+# bench scripts and the tests.
+#
+# The rule set is deliberately narrow. Style is not the thing worth automating
+# here - the code is read far more often than it is written, and a linter
+# arguing about how a line wraps costs more attention than it saves. What is
+# worth catching is the class of mistake that survives review and shows up as a
+# display rendering nothing: an unused import that was meant to be used, a name
+# that does not exist on the path nobody exercised, a mutable default.
+
+line-length = 100
+target-version = "py38"
+
+[lint]
+select = [
+    "E",  # pycodestyle errors
+    "F",  # pyflakes - undefined names, unused imports, unreachable code
+    "W",  # pycodestyle warnings
+    "I",  # import ordering
+    "UP", # pyupgrade
+    "B",  # bugbear - mutable defaults, loop-variable capture, and friends
+]
+
+[lint.per-file-ignores]
+# A PlatformIO extra_script. SCons injects `Import` and `env` into the module's
+# namespace before running it, so every reference to them is undefined as far as
+# static analysis can tell, and correct as far as the build is concerned.
+"scripts/version.py" = ["F821"]
+
+# The Klipper module reaches into printer objects that only exist at runtime and
+# catches broadly on purpose: a display throwing must never take the print with
+# it. E501 is allowed because several of the long lines are Klipper API calls
+# that read worse wrapped.
+"klippy_extras/knomi_serial.py" = ["E501"]
+
+# Both bench scripts put klippy_extras on sys.path before importing the module
+# from it, so that they encode packets with the same encoder Klipper uses rather
+# than a second implementation that could drift. The path edit has to run before
+# the import it exists to enable.
+"scripts/screenshot.py" = ["E402"]
+"scripts/simulate.py" = ["E402"]

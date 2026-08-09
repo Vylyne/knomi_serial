@@ -9,13 +9,14 @@ things that are true of the machine rather than of a screen: which tools a job
 uses, and which tool is mounted right now.
 """
 
-import logging
 import dataclasses
 import enum
+import logging
 import os
-import serial
 import struct
 import zlib
+
+import serial
 
 _BAUD_RATE = 115200
 _HEADER = b"\x83\xad\x83\xad"
@@ -611,7 +612,9 @@ class KnomiCluster:
                 try:
                     state.color = int(text, 16) & 0xFFFFFF
                 except ValueError:
-                    raise gcmd.error(f"KNOMI_TOOL: COLOR='{color}' is not a hex colour")
+                    raise gcmd.error(
+                        f"KNOMI_TOOL: COLOR='{color}' is not a hex colour",
+                    ) from None
 
         filament_type = gcmd.get("TYPE", None)
         if filament_type is not None:
@@ -737,7 +740,7 @@ class Knomi_Serial:
                 except ValueError:
                     raise config.error(
                         f"{self.name}: {key}='{raw}' is not a hex colour",
-                    )
+                    ) from None
 
             return parse
 
@@ -746,7 +749,9 @@ class Knomi_Serial:
                 try:
                     seconds = float(raw)
                 except ValueError:
-                    raise config.error(f"{self.name}: {key}='{raw}' is not a number")
+                    raise config.error(
+                        f"{self.name}: {key}='{raw}' is not a number",
+                    ) from None
                 if seconds < 0:
                     raise config.error(f"{self.name}: {key} cannot be negative")
                 return int(seconds * 1000)
@@ -758,7 +763,9 @@ class Knomi_Serial:
                 try:
                     level = int(raw)
                 except ValueError:
-                    raise config.error(f"{self.name}: {key}='{raw}' is not a number")
+                    raise config.error(
+                        f"{self.name}: {key}='{raw}' is not a number",
+                    ) from None
                 if not 0 <= level <= 16:
                     raise config.error(f"{self.name}: {key} must be 0-16")
                 return level

@@ -47,6 +47,7 @@ PRESETS = {
                      flow=2600, eta=1870, elapsed=2200, layer=96, layer_total=180),
     "heating": dict(status=k.PrinterStatus.IDLE, hotend_temp=160, working=True),
     "shutdown": dict(status=k.PrinterStatus.SHUTDOWN),
+    "waiting": dict(status=k.PrinterStatus.DISCONNECTED),
 }
 
 #: What the shutdown screen has to say. Klipper sends this on its own frame, so
@@ -54,10 +55,14 @@ PRESETS = {
 #: display happened to be holding.
 MESSAGES = {
     "shutdown": "MCU 'MCU' SHUTDOWN: LOST COMMUNICATION",
+    "waiting": "MCU 'MCU' SHUTDOWN: LOST COMMUNICATION",
 }
 
 
-def state_for(preset, config_crc):
+def state_for(preset, config_crc, color=0x9572BF, ftype=b"ABS"):
+    # Deliberately not the machine's own pink. The two colours mean different
+    # things - one is the printer, one is what is loaded in it - and a
+    # documentation shot that uses the same value for both cannot show that.
     base = dict(
         status=k.PrinterStatus.IDLE,
         homed_x=True, homed_y=True, homed_z=True,
@@ -65,7 +70,7 @@ def state_for(preset, config_crc):
         hotend_temp=243, hotend_target=245,
         bed_temp=100, bed_target=100,
         chamber_temp=50, chamber_target=50,
-        filament_color=0xFFA7C4, filament_type=b"ABS",
+        filament_color=color, filament_type=ftype,
         config_crc=config_crc,
     )
     base.update(PRESETS[preset])
@@ -185,6 +190,10 @@ def main():
     p.add_argument("--drive", choices=sorted(PRESETS),
                    help="feed the display this state first, instead of "
                         "photographing whatever a running Klipper is showing")
+    p.add_argument("--color", "--colour", dest="color", default="9572BF",
+                   help="filament colour for --drive, RRGGBB (default 9572BF, "
+                        "chosen to differ from the machine accent)")
+    p.add_argument("--type", default="ABS", help="filament type for --drive")
     p.add_argument("--settle", type=float, default=1.5,
                    help="seconds to let the screen settle before capturing")
     p.add_argument("--square", action="store_true",
@@ -205,7 +214,12 @@ def main():
     try:
         frame = None
         if args.drive:
-            frame = state_for(args.drive, config_crc)
+            try:
+                color = int(args.color.strip().lstrip("#"), 16)
+            except ValueError:
+                sys.exit(f"  --color '{args.color}' is not hex")
+            frame = state_for(
+                args.drive, config_crc, color, args.type.encode("utf-8")[:15])
             if verbose:
                 print(f"  driving '{args.drive}', settling {args.settle}s")
             # The device may have just been reset by opening the port, so give

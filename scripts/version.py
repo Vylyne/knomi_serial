@@ -51,7 +51,7 @@ def _version():
 
     dirty = bool(_git("status", "--porcelain"))
     tag = "v" + base
-    behind = _git("rev-list", "--count", "%s..HEAD" % tag)
+    behind = _git("rev-list", "--count", f"{tag}..HEAD")
 
     if not behind:
         # Tag does not exist yet.
@@ -59,17 +59,17 @@ def _version():
     elif behind == "0" and not dirty:
         return base
     else:
-        meta = "%s.g%s" % (behind, commit)
+        meta = f"{behind}.g{commit}"
 
     if dirty:
         meta += ".dirty"
-    return "%s+%s" % (base, meta)
+    return f"{base}+{meta}"
 
 
 version = _version()
 variant = env["PIOENV"]
 
-print("knomi-serial: firmware version %s (%s)" % (version, variant))
+print(f"knomi-serial: firmware version {version} ({variant})")
 
 env.Append(
     CPPDEFINES=[

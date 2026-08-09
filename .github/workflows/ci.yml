@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first one's results irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The check worth having most. The firmware's static_asserts pin the packet
+  # layout, but only against other C++ - nothing else compares it with the
+  # Python that has to produce those bytes. A field added to `struct State`
+  # without a matching change to _STATE_FMT compiles clean, installs clean, and
+  # produces a display reading every field from the wrong offset.
+  protocol:
+    name: Protocol contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python tests/test_protocol.py
+
+  lint:
+    name: Python lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install ruff
+      - run: ruff check .
+
+  # Both variants, because the toolchanger build compiles out two pages behind
+  # an #if and it is entirely possible to break only the build nobody ran.
+  firmware:
+    name: Build ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [knomi, knomi_toolchanger]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # scripts/version.py derives the build version from git describe, and
+          # a shallow clone has no tags to describe against.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+      - run: pip install platformio
+      - run: pio run -e ${{ matrix.env }}

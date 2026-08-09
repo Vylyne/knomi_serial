@@ -13,6 +13,9 @@
 namespace ui {
 namespace printing_page {
 
+//: The page these statics currently describe. Everything below outlives any
+//: one page, so a handover has to be able to tell the two apart.
+static lv_obj_t *_page = nullptr;
 static lv_obj_t *_fill = nullptr;
 static lv_obj_t *_wave = nullptr;
 static lv_timer_t *_wave_timer = nullptr;
@@ -26,6 +29,11 @@ static const int32_t kWaveBand = 2 * WAVE_AMP;
 static uint16_t _wave_buf[RES_H * kWaveBand];
 static uint16_t _wave_fg = 0;
 static uint16_t _wave_bg = 0;
+
+//: Height of the surface at each column, so a frame identical to the last one
+//: can be skipped before anything is painted or flushed.
+static uint8_t _surface[RES_H];
+static bool _surface_valid = false;
 static lv_obj_t *_sub = nullptr;
 static lv_obj_t *_tool = nullptr;
 static lv_obj_t *_dot_l = nullptr;
@@ -86,8 +94,6 @@ const int8_t kSine[32] = {
 //: surface is visibly travelling rather than heaving as one block.
 const int32_t kWavePerPixel = 51;
 
-//: Table entries per tick at full flow, in 1/256ths. About one cycle a second.
-const int32_t kWaveSpeed = 307;
 
 int32_t _sine(int32_t phase_fx) {
   // Wrapped rather than clamped, and masked rather than modulo'd, because the
@@ -102,8 +108,9 @@ static void _pause_handler(lv_event_t *e);
 static void _cancel_handler(lv_event_t *e);
 static void _wave_tick(lv_timer_t *timer);
 static void _page_deleted(lv_event_t *e);
+static void _stop_timers();
 static void _place_wave();
-static void _paint_wave();
+static void _paint_wave(bool force);
 static void _disarm_cancel(lv_timer_t *timer);
 static void _show_cancel_state();
 static lv_obj_t *_init_dot(lv_obj_t *parent);
@@ -113,9 +120,16 @@ static void _size_scrim(
     int32_t pad_x, int32_t pad_y, lv_align_t align, int32_t y);
 
 lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
+  // The outgoing page, if there is one, has not been deleted yet - its screen
+  // is still fading out and takes another 300ms to go. Its timers are ours to
+  // end here, because by the time its delete handler runs it will no longer
+  // recognise itself as current and will leave them alone.
+  _stop_timers();
+
   lv_obj_t *page = lv_obj_create(parent);
   lv_obj_remove_style_all(page);
   lv_obj_set_size(page, RES_H, RES_V);
+  _page = page;
 
   // The fill is a plain rectangle rising from the bottom, with no circular
   // mask: the GC9A01 is a round panel, so pixels outside the inscribed circle
@@ -152,6 +166,7 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   _amp_fx = 0;
   _phase_fx = 0;
   _fill_top = -1;
+  _surface_valid = false;
 
   // Every cache forgotten, for the same reason _sized_for is below: none of
   // these are part of the page, so they outlive it. Left standing they would
@@ -246,12 +261,42 @@ static void _pause_handler(lv_event_t *e) {
   printer::send::send_gcode(_paused ? "RESUME" : "PAUSE");
 }
 
+// Tear down what is not owned by a widget: the two timers.
+//
+// Only if the page being deleted is still the current one. A screen load with
+// auto-delete does not destroy the outgoing screen until its fade finishes, so
+// the order on a rebuild is: new page built, then - 300ms later - old page
+// deleted. Both pages share these statics, so an unconditional handler had the
+// outgoing page delete the *incoming* page's timer and null its canvas. The
+// tide stopped for good, and only when a printing screen was rebuilt while
+// already printing, which is exactly what a config change now causes.
 static void _page_deleted(lv_event_t *e) {
+  if (lv_event_get_target(e) != _page) {
+    return;
+  }
+  _page = nullptr;
+  _stop_timers();
+  _wave = nullptr;
+  _key_pause = nullptr;
+  _key_cancel = nullptr;
+}
+
+//: Both timers, from either side of the handover.
+//:
+//: _cancel_timer needs this at least as much as the wave does: it is created
+//: only when a cancel is armed, and if the page went away before the second tap
+//: it outlived the corner it was going to redraw. That is a use-after-free with
+//: a three second fuse.
+static void _stop_timers() {
   if (_wave_timer) {
     lv_timer_delete(_wave_timer);
     _wave_timer = nullptr;
   }
-  _wave = nullptr;
+  if (_cancel_timer) {
+    lv_timer_delete(_cancel_timer);
+    _cancel_timer = nullptr;
+  }
+  _cancel_armed = false;
 }
 
 //: Sit the band back on top of the fill after progress moves it. Only when
@@ -267,12 +312,17 @@ static void _place_wave() {
 //
 // Rows outer and columns inner, so each row is a straight walk through memory.
 // 2400 pixels a frame, which is a twenty-fourth of the glass.
-static void _paint_wave() {
+static void _paint_wave(bool force) {
   if (!_wave) {
     return;
   }
 
-  static uint8_t surface[RES_H];
+  // The surface is quantised to whole pixels, so a slow swell spends several
+  // ticks describing the same shape. Comparing 240 bytes is far cheaper than
+  // repainting and reflushing 3840 pixels to produce an identical frame, and
+  // it makes the tail of the easing - where amplitude is creeping to zero -
+  // cost almost nothing.
+  bool changed = force || !_surface_valid;
   for (int32_t x = 0; x < RES_H; x++) {
     int32_t s = _sine(_phase_fx + x * kWavePerPixel);
     int32_t top = WAVE_AMP - (_amp_fx * s) / (16 * 100);
@@ -282,7 +332,14 @@ static void _paint_wave() {
     if (top > kWaveBand) {
       top = kWaveBand;
     }
-    surface[x] = (uint8_t)top;
+    if ((uint8_t)top != _surface[x]) {
+      _surface[x] = (uint8_t)top;
+      changed = true;
+    }
+  }
+  _surface_valid = true;
+  if (!changed) {
+    return;
   }
 
   for (int32_t y = 0; y < kWaveBand; y++) {
@@ -290,7 +347,7 @@ static void _paint_wave() {
     for (int32_t x = 0; x < RES_H; x++) {
       // Above the surface is the page's own ground, which is black - the same
       // thing that would show if this band were not here at all.
-      row[x] = ((int32_t)surface[x] > y) ? _wave_bg : _wave_fg;
+      row[x] = ((int32_t)_surface[x] > y) ? _wave_bg : _wave_fg;
     }
   }
 
@@ -332,8 +389,8 @@ static void _wave_tick(lv_timer_t *timer) {
     return;
   }
 
-  _phase_fx += flow_fx * kWaveSpeed / 256;
-  _paint_wave();
+  _phase_fx += flow_fx * WAVE_SPEED / 256;
+  _paint_wave(false);
 }
 
 // Two taps, because this ends a job. The first arms and says so by turning into
@@ -450,7 +507,10 @@ void printer_update(const printer::State &state) {
     lv_obj_set_style_bg_color(_fill, colour, LV_PART_MAIN);
     _wave_fg = lv_color_to_u16(colour);
     _wave_bg = lv_color_to_u16(lv_color_black());
-    _paint_wave();
+    // Forced: the surface has not moved, but every pixel of it is a different
+    // colour, so the skip-if-unchanged test would wrongly say there is nothing
+    // to do.
+    _paint_wave(true);
   }
 
   int32_t pct = state.progress;

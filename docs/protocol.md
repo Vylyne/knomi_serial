@@ -87,8 +87,8 @@ tool shares the toolhead's motion report and none of its filament.
 
 ## `CONFIG` — 280 bytes
 
-Everything that is true for hours at a time: the macro list, colours, and the
-sleep timings.
+Everything that is true for hours at a time: the macro list, colours, the sleep
+timings, and which corners are soft keys.
 
 | Type       | Field |
 |------------|-------|
@@ -97,7 +97,19 @@ sleep timings.
 | `uint32`   | `color_filament_unknown` |
 | `uint32`   | `dim_ms`, `sleep_ms` |
 | `uint8`×2  | `brightness`, `dim_brightness` (0–16) |
+| `uint8`    | `key_mask` — corners that are legends: NW 1, NE 2, SW 4, SE 8 |
 | `char[256]`| `gcodes`, newline-separated |
+
+`key_mask` is how a corner stops being a touch target without losing its symbol.
+A corner with a switch behind it — wired to the device, or bound to a
+`[gcode_button]` on the host — already reports its own press, and two ways to
+fire one action, one of them invisible, is a way to fire it by accident. The
+mark stays exactly where it was and becomes the key's legend.
+
+Adopting a config reloads whatever screen is up, because which corners are soft
+is decided when a page is built. Colours would follow on their own, being read
+at draw time, so without the reload a `printer.cfg` edit would apply to half the
+screen and wait for a status change for the rest.
 
 ### `present` means override, not replace
 
@@ -116,6 +128,7 @@ an option actually written in `printer.cfg`.
     brightness              bit 4
     dim_brightness          bit 5
     gcodes                  bit 6
+    key_mask                bit 7
 
 ### How it stays in sync
 

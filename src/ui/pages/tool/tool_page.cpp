@@ -131,7 +131,7 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   // ground is a single known colour and ink_on can simply answer for it.
   _material = lv_label_create(page);
   lv_obj_set_style_text_font(_material, &lv_font_montserrat_18, LV_PART_MAIN);
-  lv_obj_align(_material, LV_ALIGN_BOTTOM_MID, 0, -13);
+  lv_obj_align(_material, LV_ALIGN_BOTTOM_MID, 0, -22);
 
   // The two actions this page's question leads to, on the same lower diagonals
   // the printing page puts pause and cancel on. Down is into the hotend.

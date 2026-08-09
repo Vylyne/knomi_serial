@@ -39,8 +39,8 @@ void _defaults(Config *c) {
   c->sleep_ms = SLEEP_TIMEOUT_MS;
   c->brightness = DISPLAY_BRIGHTNESS;
   c->dim_brightness = SLEEP_DIM_BRIGHTNESS;
+  c->key_mask = CORNER_LEGEND_KEYS;
   c->_padding[0] = 0;
-  c->_padding[1] = 0;
   // Empty until the host says otherwise. The macro list is the host's to know -
   // it comes from printer.cfg - so there is no sensible thing to invent here.
   c->gcodes[0] = '\0';
@@ -102,6 +102,9 @@ bool apply(const void *payload, uint32_t len) {
   }
   if (wire.present & kHasDimBrightness) {
     c->dim_brightness = wire.dim_brightness;
+  }
+  if (wire.present & kHasKeyMask) {
+    c->key_mask = wire.key_mask;
   }
   if (wire.present & kHasGcodes) {
     memcpy(c->gcodes, wire.gcodes, sizeof(c->gcodes));

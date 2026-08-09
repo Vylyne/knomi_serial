@@ -17,10 +17,44 @@
 // How often to report firmware version and device state back to the host.
 #define REPORT_PERIOD_MS 2000
 
-// Corner controls sit at the four diagonals, where the physical keys are going.
-// With keys fitted, set CORNER_KEYS_TOUCH to 0: the symbols stay exactly where
-// they are and become legends for the keys instead of touch targets.
-#define CORNER_KEYS_TOUCH 1
+// ---------------------------------------------------------------------------
+// A link that has gone quiet
+//
+// The host sends every 100ms and there is nothing in the protocol that says
+// goodbye - a Klipper that is killed rather than closed simply stops. Without a
+// watchdog the screen holds its last frame forever, and a print that finished
+// an hour ago is indistinguishable from one at 55%.
+//
+// Deliberately not a screen change. What was last heard is still the most
+// useful thing to show; it just has to stop claiming to be current.
+// ---------------------------------------------------------------------------
+
+// Silence longer than this and the link is treated as stale. Thirty missed
+// packets, so ordinary jitter or a busy host never trips it.
+#define STALE_TIMEOUT_MS 3000
+
+#define STALE_MARK_SIZE 18
+// Bottom middle, below where the tool page's material name sits and above the
+// rim. Nothing is touchable down here on any page.
+#define STALE_MARK_Y -2
+#define COLOR_STALE 0xE07A5F
+
+// Corner controls sit at the four diagonals, where the physical keys go.
+//
+// Each corner is either a soft key - the glass is the button - or a legend for
+// something else that already reports the press: a switch wired to the device,
+// or a [gcode_button] on the host. A legend keeps its symbol in exactly the
+// same place and loses only the touch target, so nothing on screen moves when
+// hardware arrives and the position is already learned by then.
+//
+// This is the compile-time default. printer.cfg overrides it per corner with
+// `hardware_keys`, because which corners have switches behind them is a fact
+// about one machine, not about the firmware.
+//
+//   bit 0  NW    bit 1  NE    bit 2  SW    bit 3  SE
+//
+// 0 means every corner is soft, which is right for a bare display.
+#define CORNER_LEGEND_KEYS 0
 // 38 on a 70 offset. At 52 on 62 the corner circle and the readout pill below
 // genuinely intersected - centres 24.8px apart against 39.5px of combined
 // radii. 70 is also the furthest the offset can go: a 19px radius at
@@ -116,7 +150,20 @@
 //
 // Also half the height of the canvas, so raising it costs 480 bytes a pixel
 // and a proportional share of each frame.
-#define WAVE_AMP 5
+#define WAVE_AMP 8
+
+// How fast the swell travels at full flow, in 1/256ths of a wave table entry
+// per tick. 32 entries is one full cycle, so 190 is about one cycle every one
+// and a half seconds.
+//
+// This is the speed at WAVE_FLOW_FULL and nothing prints there for long -
+// ordinary perimeter flow sits around three quarters of it, and the wave slows
+// with the extruder. Judge it against a real print rather than a pinned test.
+//
+// Slower is also cheaper: the surface is quantised to whole pixels, so a lazy
+// wave spends several ticks describing the same shape and those frames are
+// skipped before anything is painted.
+#define WAVE_SPEED 190
 
 // Extrusion rate that counts as a full-amplitude swell, in micrometres of
 // filament per second. Around 3mm/s is ordinary perimeter flow.
@@ -129,7 +176,11 @@
 // Depth of the pool of loaded filament along the bottom of the tool page - the
 // printing page's fill, at rest. Deep enough to read as a body of colour, shallow
 // enough to stay clear of the corner marks at 150-188.
-#define POOL_H 36
+// 44, not 36: the stale-link mark sits at the very bottom, and the material
+// name had to move up to clear it. Both now sit inside the pool, which matters
+// because the name's ink is chosen against the pool's colour - half a line of
+// black text on black glass is not a readout.
+#define POOL_H 44
 
 // Readouts sit on a scrim - a dark pill sized to the text - so they never have
 // to be legible against the filament colour directly. Black over black is a

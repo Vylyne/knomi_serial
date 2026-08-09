@@ -40,6 +40,9 @@ namespace printer
     static const char *_fault_text = nullptr;
     static size_t _payload_len = 0;
 
+    //: When the last valid state frame landed. Zero means none ever has.
+    static volatile uint32_t _last_state_ms = 0;
+
     static void _fault(const char *text);
     static bool _footer_at(size_t len);
     static void _take_state(size_t len);
@@ -150,6 +153,8 @@ namespace printer
         // short could still leave it unterminated.
         state->filament_type[printer::kFilamentTypeMaxLen] = '\0'; });
 
+      _last_state_ms = millis();
+
       // Read back without the lock, which is safe because this task is the only
       // writer - the lock exists to stop the UI seeing a half-updated struct,
       // not to protect us from ourselves.
@@ -157,6 +162,16 @@ namespace printer
       {
         send::send_config_request();
       }
+    }
+
+    uint32_t link_age_ms()
+    {
+      uint32_t at = _last_state_ms;
+      if (at == 0)
+      {
+        return UINT32_MAX;
+      }
+      return millis() - at;
     }
 
     static void _take_message(size_t len)

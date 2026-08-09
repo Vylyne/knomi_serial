@@ -14,6 +14,13 @@ typedef void (*printer_update_cb_t)(const printer::State&);
 void init();
 void update(const printer::State &state);
 
+//: Show or hide the "nothing is talking to me" mark.
+//:
+//: Not part of any screen. It lives on LVGL's top layer, which survives a
+//: screen load and does not belong to the scrolling page row - so it says the
+//: same thing wherever you have swiped to, and stays put while you swipe.
+void set_link_stale(bool stale);
+
 //: Hand the last known state to the pages again.
 //:
 //: Needed because pages are only updated when the state changes, and only the

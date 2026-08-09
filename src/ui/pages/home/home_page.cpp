@@ -17,6 +17,20 @@ lv_obj_t *_y = nullptr;
 lv_obj_t *_z = nullptr;
 printer::TramType _tram_type = printer::TramType::kNone;
 
+//: Last values written. Setting a local style property invalidates the object
+//: whether or not the value changed, and this page was restating four button
+//: colours - eight style writes, since the ink follows the fill - on every
+//: packet, to say the axes were still homed exactly as they had been.
+//:
+//: It cost almost nothing while the page was off-screen, because LVGL discards
+//: an invalidation outside the clip area. It cost the full four buttons the
+//: moment you swiped to it, which is the only time anyone would notice.
+//:
+//: Impossible sentinels, so the first update after a rebuild always writes.
+int8_t _shown_x = -1;
+int8_t _shown_y = -1;
+int8_t _shown_z = -1;
+
 void _all_click_handler(lv_event_t *e);
 void _tram_click_handler(lv_event_t *e);
 void _x_click_handler(lv_event_t *e);
@@ -25,6 +39,12 @@ void _z_click_handler(lv_event_t *e);
 
 lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   lv_obj_t *page = page_helper::create_page(parent, "HOME");
+
+  // These are not part of the page and outlive it, so a rebuilt page would
+  // otherwise be told it is already showing what the last one showed.
+  _shown_x = -1;
+  _shown_y = -1;
+  _shown_z = -1;
 
   int all_x, all_width;
   const char *tram_label;
@@ -97,25 +117,23 @@ void printer_update(const printer::State &state) {
   lv_obj_set_state(_y, LV_STATE_DISABLED, state.working);
   lv_obj_set_state(_z, LV_STATE_DISABLED, state.working);
 
-  if (state.homed_x) {
-    page_helper::set_button_color(_x, COLOR_HOMED_BG);
-  } else {
-    page_helper::set_button_color(_x, COLOR_BTN_BG);
+  int8_t x = state.homed_x ? 1 : 0;
+  int8_t y = state.homed_y ? 1 : 0;
+  int8_t z = state.homed_z ? 1 : 0;
+  if (x == _shown_x && y == _shown_y && z == _shown_z) {
+    return;
   }
-  if (state.homed_y) {
-    page_helper::set_button_color(_y, COLOR_HOMED_BG);
-  } else {
-    page_helper::set_button_color(_y, COLOR_BTN_BG);
-  }
-  if (state.homed_z) {
-    page_helper::set_button_color(_z, COLOR_HOMED_BG);
-  } else {
-    page_helper::set_button_color(_z, COLOR_BTN_BG);
-  }
-  if (state.homed_x && state.homed_y && state.homed_z) {
-    page_helper::set_button_color(_all, COLOR_HOMED_BG);
-  } else {
-    page_helper::set_button_color(_all, COLOR_BTN_BG);
+  bool all = _shown_x == 1 && _shown_y == 1 && _shown_z == 1;
+  _shown_x = x;
+  _shown_y = y;
+  _shown_z = z;
+
+  page_helper::set_button_color(_x, x ? COLOR_HOMED_BG : COLOR_BTN_BG);
+  page_helper::set_button_color(_y, y ? COLOR_HOMED_BG : COLOR_BTN_BG);
+  page_helper::set_button_color(_z, z ? COLOR_HOMED_BG : COLOR_BTN_BG);
+  if ((x && y && z) != all) {
+    page_helper::set_button_color(
+        _all, (x && y && z) ? COLOR_HOMED_BG : COLOR_BTN_BG);
   }
 }
 

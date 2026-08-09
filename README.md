@@ -53,8 +53,19 @@ brightness:      # Backlight level, 0-16. Default 8.
 dim_brightness:  # Level once dimmed. Default 3.
 dim_time:        # Seconds idle before dimming. Default 30.
 sleep_time:      # Seconds idle before the backlight goes out. Default 60.
-                 # A screen never sleeps while its tool is in the job, while the
-                 # nozzle is hot, or while Klipper is down - see KNOMI_TOOL.
+                 # A screen never sleeps while its tool is in the job or while
+                 # the nozzle is hot - see KNOMI_TOOL. Those are claims about
+                 # the machine, so a link that has gone quiet stops making them
+                 # and the normal timers resume.
+
+hardware_keys:   # Corners with a switch behind them, from NW NE SW SE. Listing
+                 # one keeps its symbol as a legend and removes its touch
+                 # target: a switch wired to the display, or a [gcode_button]
+                 # on the host, already reports that press, and two ways to
+                 # fire one action - one of them invisible - is a way to fire
+                 # it by accident. Default is none, so every corner is a soft
+                 # key and a bare display is fully usable.
+                 # e.g. hardware_keys: NW, NE
 ```
 
 These reach the device over the config channel, which it asks for whenever what

@@ -9,6 +9,7 @@
 #include "printer/config.h"
 #include "printer/printer.h"
 #include "printer/recv/recv_state.h"
+#include "printer/recv/recv_task.h"
 #include "printer/send/send_cmd.h"
 #include "ui/ui.h"
 #include "ui/screens/init/init_screen.h"
@@ -85,7 +86,17 @@ namespace ui
       // A shutdown screen exists to say something went wrong. A dark one says
       // nothing, so an alarm wakes the display whatever else is true.
       bool alarm = _last_status == printer::Status::kShutdown;
-      bool keep_awake = is_hot || in_job || alarm;
+
+      // Every reason to stay awake is a claim about the machine, and a link
+      // that has gone quiet is no longer entitled to make one. The hot-nozzle
+      // net in particular says a hot nozzle must never sit behind a dark
+      // screen - but once nothing is arriving we do not know that the nozzle
+      // is hot, only that it was. Holding the backlight on forever off the
+      // back of a reading from an hour ago is the wrong kind of caution.
+      bool stale = printer::recv::link_age_ms() > STALE_TIMEOUT_MS;
+      set_link_stale(stale);
+
+      bool keep_awake = !stale && (is_hot || in_job || alarm);
 
       // Wake for the printer, not only for a finger. This tested `dimmed` alone,
       // so once the screen had gone fully dark the only way back was a touch:

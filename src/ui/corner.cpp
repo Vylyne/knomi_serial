@@ -1,6 +1,7 @@
 #include "corner.h"
 
 #include "board_conf.h"
+#include "printer/config.h"
 #include "ui/theme.h"
 #include "user_conf.h"
 
@@ -8,6 +9,20 @@ namespace ui {
 namespace corner {
 
 namespace {
+
+//: Whether this corner is a soft key, asked of the running config rather than
+//: of a build flag - which corners have switches behind them is a fact about
+//: one machine.
+bool is_soft(Slot slot) {
+  uint8_t bit = 0;
+  switch (slot) {
+  case Slot::kNW: bit = printer::kKeyNW; break;
+  case Slot::kNE: bit = printer::kKeyNE; break;
+  case Slot::kSW: bit = printer::kKeySW; break;
+  case Slot::kSE: bit = printer::kKeySE; break;
+  }
+  return (printer::config::get().key_mask & bit) == 0;
+}
 
 bool is_left(Slot slot) {
   return slot == Slot::kNW || slot == Slot::kSW;
@@ -50,17 +65,15 @@ lv_obj_t *create(
   region_pos(slot, &rx, &ry);
   lv_obj_align(region, LV_ALIGN_TOP_LEFT, rx, ry);
 
-#if CORNER_KEYS_TOUCH
-  if (cb) {
+  if (cb && is_soft(slot)) {
     lv_obj_add_flag(region, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(region, cb, LV_EVENT_CLICKED, nullptr);
+  } else {
+    // With a switch behind it the glass should do nothing - two ways to fire
+    // the same action, one of them invisible, is a way to fire it by accident.
+    // The mark below is created either way; that is the whole point.
+    lv_obj_remove_flag(region, LV_OBJ_FLAG_CLICKABLE);
   }
-#else
-  // With a key fitted, the glass beside it should do nothing - two ways to fire
-  // the same action, one of them invisible, is a way to fire it by accident.
-  lv_obj_remove_flag(region, LV_OBJ_FLAG_CLICKABLE);
-  (void)cb;
-#endif
 
   // The mark. A scrim disc so it survives whatever the fill is doing behind it,
   // and a symbol in the colour of the action. Small on purpose - it is a label

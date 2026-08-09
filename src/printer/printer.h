@@ -186,6 +186,16 @@ enum ConfigHas : uint32_t {
   kHasBrightness     = 1u << 4,
   kHasDimBrightness  = 1u << 5,
   kHasGcodes         = 1u << 6,
+  kHasKeyMask        = 1u << 7,
+};
+
+//: Bits of Config.key_mask - the corners that are legends rather than soft
+//: keys, because something else already reports the press.
+enum KeySlot : uint8_t {
+  kKeyNW = 1u << 0,
+  kKeyNE = 1u << 1,
+  kKeySW = 1u << 2,
+  kKeySE = 1u << 3,
 };
 
 struct Config {
@@ -204,7 +214,15 @@ struct Config {
 
   uint8_t brightness;
   uint8_t dim_brightness;
-  uint8_t _padding[2];
+
+  //: Corners that are legends rather than touch targets, as KeySlot bits. A
+  //: corner with a switch behind it - wired to the device, or bound to a
+  //: [gcode_button] on the host - keeps its symbol and loses its hit region,
+  //: because two ways to fire one action, one of them invisible, is a way to
+  //: fire it by accident.
+  uint8_t key_mask;
+
+  uint8_t _padding[1];
 
   //: Newline-separated macro names for the gcode page. 256 bytes, and the
   //: reason proto 2 spent three quarters of its bandwidth restating a list

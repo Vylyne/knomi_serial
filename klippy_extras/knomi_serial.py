@@ -70,9 +70,9 @@ _PROTO_VERSION = 3
 _STATE_FMT = "!I7?B10iI5iI16s"
 _STATE_SIZE = struct.calcsize(_STATE_FMT)
 
-#: The config frame's payload, against `struct Config`. The two `x` are its
-#: explicit padding, keeping gcodes on a 4-byte boundary.
-_CONFIG_FMT = "!5I2B2x256s"
+#: The config frame's payload, against `struct Config`. The `x` is its explicit
+#: padding, keeping gcodes on a 4-byte boundary.
+_CONFIG_FMT = "!5I3Bx256s"
 _CONFIG_SIZE = struct.calcsize(_CONFIG_FMT)
 
 #: Bits of Config.present, against `enum ConfigHas`. A field whose bit is clear
@@ -85,6 +85,12 @@ _HAS_SLEEP_MS = 1 << 3
 _HAS_BRIGHTNESS = 1 << 4
 _HAS_DIM_BRIGHTNESS = 1 << 5
 _HAS_GCODES = 1 << 6
+_HAS_KEY_MASK = 1 << 7
+
+#: Bits of Config.key_mask, against `enum KeySlot`. A corner named here keeps
+#: its symbol as a legend and loses its touch target, because something else
+#: already reports that press.
+_KEY_SLOTS = {"NW": 1 << 0, "NE": 1 << 1, "SW": 1 << 2, "SE": 1 << 3}
 
 #: Used only if the VERSION file cannot be found next to this module, which
 #: happens if knomi_serial.py was copied into klippy/extras rather than
@@ -199,6 +205,7 @@ def config_payload(config):
         config.sleep_ms,
         config.brightness,
         config.dim_brightness,
+        config.key_mask,
         config.gcodes,
     )
 
@@ -305,6 +312,7 @@ class DeviceConfig:
 
     brightness: int = 0
     dim_brightness: int = 0
+    key_mask: int = 0
 
     gcodes: bytes = b""
 
@@ -773,6 +781,24 @@ class Knomi_Serial:
         values["dim_brightness"] = _take(
             _HAS_DIM_BRIGHTNESS, "dim_brightness", _level("dim_brightness")
         )
+
+        def _keys(raw):
+            # A corner listed here has a switch behind it - wired to the device,
+            # or bound to a [gcode_button] on the host - so the glass stops
+            # being a second, invisible way to fire the same action. The symbol
+            # stays exactly where it was and becomes the key's legend.
+            mask = 0
+            for name in str(raw).replace(",", " ").split():
+                slot = name.strip().upper()
+                if slot not in _KEY_SLOTS:
+                    raise config.error(
+                        f"{self.name}: hardware_keys '{name}' is not one of "
+                        f"{', '.join(sorted(_KEY_SLOTS))}",
+                    )
+                mask |= _KEY_SLOTS[slot]
+            return mask
+
+        values["key_mask"] = _take(_HAS_KEY_MASK, "hardware_keys", _keys)
 
         gcodes = b""
         raw_gcodes = config.get("gcodes", None)

@@ -49,12 +49,16 @@ the secondary target, and it shows. The two pages that only exist in that build
 — `home` and `move` — have not been brought into the same design language as the
 rest yet. They work; they look like the firmware this was forked from.
 
-| | |
-| --- | --- |
-| Tool page, G-code page, printing screen, e-stop | current design |
-| Home and move pages | inherited, not yet reworked |
-| Corner keys as touch targets | working |
-| Corner keys read from the display's own GPIO | not implemented — see below |
+<table>
+  <tr><th align="left">Area</th><th align="left">State</th></tr>
+  <tr><td>Tool page</td><td rowspan="4">current design</td></tr>
+  <tr><td>G-code page</td></tr>
+  <tr><td>Printing screen</td></tr>
+  <tr><td>Emergency stop page</td></tr>
+  <tr><td>Home and move pages</td><td>inherited, not yet reworked</td></tr>
+  <tr><td>Corner keys as touch targets</td><td>working</td></tr>
+  <tr><td>Corner keys from the display's own GPIO</td><td>not implemented, <a href="#the-corner-keys">see below</a></td></tr>
+</table>
 
 ## Installation
 
@@ -162,14 +166,14 @@ KNOMI_TOOL [SCREEN=T0_knomi | TOOL=0] [USED=1] [COLOR=FF8800] [TYPE=PLA]
 
 | Parameter | Value | If omitted |
 | --- | --- | --- |
-| `SCREEN` | Which screen, by section name — `[knomi_serial T0_knomi]` is `T0_knomi`, the way `[fan_generic my_fan]` is `my_fan`. <td rowspan="2">Optional for single screen setups. mutliscreen stup must define either TOOL or SCREEN </td>
-| `TOOL` | Which screen, by its `tool:` value. `T0`, `t0` and `0` are equivalent. May match several screens. |
+| `SCREEN` | Which screen, by section name — `[knomi_serial T0_knomi]` is `T0_knomi`, the way `[fan_generic my_fan]` is `my_fan`. | see below |
+| `TOOL` | Which screen, by its `tool:` value. `T0`, `t0` and `0` are equivalent. May match several screens. | see below |
 | `USED` | `0` or `1` — whether the running job uses this tool. Decides whether the screen sleeps. | Unchanged |
 | `COLOR` | Filament colour as `RRGGBB`, leading `#` allowed. Empty clears it back to unknown. | Unchanged |
 | `TYPE` | Material name, up to 15 characters. | Unchanged |
 
-**On one screen you need neither** — there is nothing to disambiguate. With
-more than one, give exactly one of them; the error lists what is configured.
+<sup>**Multi-screen** — give either `SCREEN=` or `TOOL=`, not both.<br>
+**Single screen** — both are optional; there is nothing to disambiguate.</sup>
 
 The two forms exist because two different callers need different things.
 `SCREEN=` names the object, which is what Klipper does everywhere else, and is

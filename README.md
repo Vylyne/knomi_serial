@@ -10,8 +10,8 @@ Knomi_Serial is an alternative firmware for the BTT Knomi V2 and other similar d
 network-reliant Moonraker connection with a direct serial connection to the Klipper host.
 
 | Tool, at temperature | Heating | Printing | Shutdown |
-| --- | --- | --- | --- |
-| ![](docs/img/idle.png) | ![](docs/img/heating.png) | ![](docs/img/printing.png) | ![](docs/img/shutdown.png) |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/img/idle.png" width="150"> | <img src="docs/img/heating.png" width="150"> | <img src="docs/img/printing.png" width="150"> | <img src="docs/img/shutdown.png" width="150"> |
 
 Colour carries three separate things and never mixes them. The filament is
 whatever the slicer loaded, and it is the fill that rises with progress — its
@@ -22,7 +22,18 @@ there, 60°C on the way to 250 has barely started. The machine's own accent —
 pink here, yours in `printer.cfg` — is reserved for chrome that is about the
 printer rather than the print.
 
-Those are real captures, pulled off the glass over the serial link:
+<img src="docs/img/stale.png" width="120" align="right">
+
+Nothing in the protocol says goodbye, and a Klipper that is killed rather than
+closed simply stops sending. Three seconds of silence and the display says so,
+rather than holding its last frame indefinitely — a print that finished an hour
+ago should not look like one at 55%. It keeps showing what it last heard,
+because that is still the most useful thing on the glass; it just stops claiming
+to be current, and lets the screen sleep on its normal timers again.
+
+<br clear="right">
+
+Every shot above is a real capture, pulled off the glass over the serial link:
 
 ```
 python scripts/screenshot.py COM5 --drive printing -o docs/img/printing.png

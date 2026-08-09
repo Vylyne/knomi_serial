@@ -5,10 +5,9 @@
 #include "ui/pages/estop/estop_page.h"
 #include "ui/pages/gcode/gcode_page.h"
 #include "ui/pages/home/home_page.h"
-#include "ui/pages/filament/filament_page.h"
 #include "ui/pages/move/move_page.h"
 #include "ui/pages/none/none_page.h"
-#include "ui/pages/temp/temp_page.h"
+#include "ui/pages/tool/tool_page.h"
 #include "ui/ui.h"
 #include "user_conf.h"
 
@@ -24,10 +23,9 @@ namespace ui
     const screen_helper::page_update_t _updates[] = {
         IDLE_PAGE_0::printer_update,
         IDLE_PAGE_1::printer_update,
-        IDLE_PAGE_2::printer_update,
 #if !defined(TOOLCHANGER) || TOOLCHANGER == 0
+        IDLE_PAGE_2::printer_update,
         IDLE_PAGE_3::printer_update,
-        IDLE_PAGE_4::printer_update,
 #endif
         estop_page::printer_update,
     };
@@ -42,11 +40,10 @@ namespace ui
 
       IDLE_PAGE_0::init(scr, state);
       IDLE_PAGE_1::init(scr, state);
-      IDLE_PAGE_2::init(scr, state);
 
 #if !defined(TOOLCHANGER) || TOOLCHANGER == 0
+      IDLE_PAGE_2::init(scr, state);
       IDLE_PAGE_3::init(scr, state);
-      IDLE_PAGE_4::init(scr, state);
 #endif
 
       // Last page on every screen. The emergency stop used to ride the overlay,

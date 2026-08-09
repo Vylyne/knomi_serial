@@ -100,5 +100,17 @@ void set(lv_obj_t *mark, const char *symbol, lv_color_t color) {
   lv_obj_set_style_text_color(label, color, LV_PART_MAIN);
 }
 
+void set_enabled(lv_obj_t *mark, bool enabled) {
+  if (!mark) {
+    return;
+  }
+  lv_obj_t *label = lv_obj_get_child(mark, 0);
+  if (!label) {
+    return;
+  }
+  lv_obj_set_style_text_opa(
+      label, enabled ? LV_OPA_COVER : CORNER_DISABLED_OPA, LV_PART_MAIN);
+}
+
 }
 }

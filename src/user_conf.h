@@ -44,6 +44,10 @@
 #define CORNER_TOUCH_H 106
 #define CORNER_TOUCH_INSET 4
 
+// How faint a corner goes when its action is unavailable. Faint enough to read
+// as off, present enough that the key beside it still has a legend.
+#define CORNER_DISABLED_OPA LV_OPA_30
+
 // Destructive controls ask twice and forget the first ask after this.
 //
 // Not a press-and-hold. A hold reads as safer but is slower exactly when speed
@@ -53,12 +57,16 @@
 #define CONFIRM_MS 3000
 
 // Idle screen page order.
+//
+// tool_page is temp_page and filament_page merged. They were split along a line
+// the machine does not have: one listed every temperature and could not be
+// touched, the other offered load and unload while saying nothing about what
+// was loaded or whether it was warm enough to move. One page answers both.
 #define IDLE_PAGE_0 gcode_page
-#define IDLE_PAGE_1 temp_page
-#define IDLE_PAGE_2 filament_page
+#define IDLE_PAGE_1 tool_page
 #if !defined(TOOLCHANGER) || TOOLCHANGER == 0
-#define IDLE_PAGE_3 home_page
-#define IDLE_PAGE_4 move_page
+#define IDLE_PAGE_2 home_page
+#define IDLE_PAGE_3 move_page
 #endif
 
 // Index of default idle screen page.
@@ -93,6 +101,11 @@
 // sizes; this lifts it without touching the haze.
 #define HEAT_INK_LIFT 90
 
+// Depth of the pool of loaded filament along the bottom of the tool page - the
+// printing page's fill, at rest. Deep enough to read as a body of colour, shallow
+// enough to stay clear of the corner marks at 150-188.
+#define POOL_H 36
+
 // Readouts sit on a scrim - a dark pill sized to the text - so they never have
 // to be legible against the filament colour directly. Black over black is a
 // no-op, so this is invisible until the fill is actually behind it. Raise it if
@@ -113,6 +126,11 @@
 // Shown while a cancel is armed and waiting for its second tap.
 #define COLOR_CONFIRM_BG lv_color_hex(0xE04A32)
 #define COLOR_HOMED_BG lv_color_hex(0xffe3ba)
+
+// Corner symbols on the tool page. These are inks on a dark disc rather than
+// fills, so they are the one place a saturated colour is safe.
+#define COLOR_LOAD lv_color_hex(0xbaffc1)
+#define COLOR_UNLOAD lv_color_hex(0xffe3ba)
 
 // G-code screen colors.
 #define COLOR_GCODE_UNSELECTED lv_color_hex(0x808080)

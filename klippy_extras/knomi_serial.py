@@ -391,13 +391,68 @@ class KnomiCluster:
     def register(self, device):
         self.devices.append(device)
 
-    def tool_state(self, tool):
-        """The record for `tool`, created on first use."""
-        if tool is None:
-            return ToolState()
-        if tool not in self.tools:
-            self.tools[tool] = ToolState()
-        return self.tools[tool]
+    def tool_state(self, screen):
+        """The filament record for one screen, created on first use.
+
+        Keyed by screen rather than by tool. It was keyed by the normalised
+        `tool:` value, which meant a section that declared no tool had no key -
+        `tool_state(None)` handed back a fresh ToolState that was never stored,
+        so a single-display machine got default colour and material back on
+        every tick and nothing could ever set them.
+        """
+        if screen not in self.tools:
+            self.tools[screen] = ToolState()
+        return self.tools[screen]
+
+    def _names(self):
+        return ", ".join(sorted(d.screen_name for d in self.devices))
+
+    def resolve(self, gcmd):
+        """Which screens a command is addressed to, as a list of keys.
+
+        Two ways in, because two different callers need different things.
+
+        `SCREEN=` names the object, which is what Klipper does everywhere else -
+        `HEATER=`, `FAN=`, `PIN=` - and is the only form that can reach a
+        section declaring no `tool:` at all.
+
+        `TOOL=` addresses by the `tool:` value instead, and exists because it is
+        the only form a slicer can emit generically: `TOOL={i}` sits in the same
+        loop as `filament_colour[i]`, so the macro writes itself. Naming screens
+        means writing that mapping out by hand in PRINT_START.
+
+        It returns a list because `TOOL=` may match more than one screen, and
+        two displays showing one tool should follow one spool.
+
+        Neither is needed when there is only one screen - there is nothing to
+        disambiguate, and asking would be ceremony.
+        """
+        name = gcmd.get("SCREEN", None)
+        tool = _normalize_tool(gcmd.get("TOOL", None))
+
+        if name is not None and tool is not None:
+            raise gcmd.error("Give SCREEN= or TOOL=, not both")
+
+        if name is not None:
+            wanted = name.strip()
+            for device in self.devices:
+                if device.screen_name == wanted:
+                    return [device.screen_name]
+            raise gcmd.error(
+                f"No screen named '{wanted}'. Configured: {self._names()}")
+
+        if tool is not None:
+            matched = [d.screen_name for d in self.devices if d.config_tool == tool]
+            if not matched:
+                raise gcmd.error(
+                    f"No screen declares tool '{tool}'. Configured: {self._names()}")
+            return matched
+
+        if len(self.devices) == 1:
+            return [self.devices[0].screen_name]
+        raise gcmd.error(
+            "SCREEN= or TOOL= is required when more than one screen is "
+            f"configured: {self._names()}")
 
     def _handle_ready(self):
         self.heaters = self.printer.lookup_object("heaters")
@@ -586,49 +641,56 @@ class KnomiCluster:
         self.was_printing = printing
 
     cmd_KNOMI_TOOL_help = (
-        "Set what a tool is loaded with and whether the running job uses it. "
-        "KNOMI_TOOL TOOL=0 [USED=1] [COLOR=FF8800] [TYPE=PLA]"
+        "Tell a screen what is loaded and whether the job uses it. KNOMI_TOOL "
+        "[SCREEN=name | TOOL=0] [USED=1] [COLOR=FF8800] [TYPE=PLA]"
     )
 
     def cmd_KNOMI_TOOL(self, gcmd):
-        tool = _normalize_tool(gcmd.get("TOOL"))
-        if tool is None:
-            raise gcmd.error("KNOMI_TOOL requires TOOL=")
-        state = self.tool_state(tool)
+        screens = self.resolve(gcmd)
 
-        # Every parameter is optional so a caller can change one fact without
-        # restating the others - updating colour mid-job must not silently
-        # resurrect a tool the job stopped using.
+        # Parsed before anything is applied, so a bad colour cannot leave half
+        # the change made - and, with TOOL= matching several screens, cannot
+        # leave some of them updated and the rest not.
         used = gcmd.get_int("USED", None, minval=0, maxval=1)
-        if used is not None:
-            state.used = bool(used)
 
         color = gcmd.get("COLOR", None)
         if color is not None:
             text = color.strip().lstrip("#")
             if not text:
-                state.color = 0
+                color = 0
             else:
                 try:
-                    state.color = int(text, 16) & 0xFFFFFF
+                    color = int(text, 16) & 0xFFFFFF
                 except ValueError:
                     raise gcmd.error(
-                        f"KNOMI_TOOL: COLOR='{color}' is not a hex colour",
+                        f"KNOMI_TOOL: COLOR='{gcmd.get('COLOR')}' is not a hex colour",
                     ) from None
 
         filament_type = gcmd.get("TYPE", None)
         if filament_type is not None:
-            state.type = filament_type.strip()[:_FILAMENT_TYPE_MAX_LEN]
+            filament_type = filament_type.strip()[:_FILAMENT_TYPE_MAX_LEN]
+
+        # Every parameter is optional so a caller can change one fact without
+        # restating the others - updating colour mid-job must not silently
+        # resurrect a tool the job stopped using.
+        for screen in screens:
+            state = self.tool_state(screen)
+            if used is not None:
+                state.used = bool(used)
+            if color is not None:
+                state.color = color
+            if filament_type is not None:
+                state.type = filament_type
 
     def get_status(self, eventtime):
         return {
-            "tools": {
-                tool: {
+            "screens": {
+                screen: {
                     "used": state.used,
                     "filament_color": f"{state.color:06X}" if state.color else None,
                     "filament_type": state.type or None,
                 }
-                for tool, state in self.tools.items()
+                for screen, state in self.tools.items()
             },
         }
 
@@ -638,6 +700,11 @@ class Knomi_Serial:
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         self.name = config.get_name()
+        # `[knomi_serial T0_knomi]` is addressed as `T0_knomi`, the way Klipper
+        # addresses `[fan_generic my_fan]` as `my_fan`. A bare `[knomi_serial]`
+        # is addressed by that, though on a machine with one screen nothing has
+        # to name it at all.
+        self.screen_name = self.name.split(maxsplit=1)[-1]
 
         self.gcode = None
         self.heaters = None
@@ -916,7 +983,7 @@ class Knomi_Serial:
         if self.mcu_sensor:
             mcu_temp, mcu_target = self.mcu_sensor.get_temp(eventtime)
 
-        tool = self.cluster.tool_state(self.config_tool)
+        tool = self.cluster.tool_state(self.screen_name)
 
         # A screen with no hotend configured can never be the active tool, which
         # is correct: it is not a tool.
@@ -1057,7 +1124,7 @@ class Knomi_Serial:
         device_crc = _hex("cfg")
 
         proto = _int("proto")
-        tool = self.cluster.tool_state(self.config_tool)
+        tool = self.cluster.tool_state(self.screen_name)
         return {
             # Host side.
             "connected": self.serial is not None and self.serial.is_open,
@@ -1066,6 +1133,9 @@ class Knomi_Serial:
             "protocol_version": _PROTO_VERSION,
             "config_crc": f"{self.config_crc:08X}",
             # What the host believes about this tool.
+            # What KNOMI_TOOL addresses this section as. Not `screen`, which
+            # already means which of the UI's screens is loaded.
+            "screen_name": self.screen_name,
             "tool": self.config_tool,
             "used": tool.used,
             "filament_color": f"{tool.color:06X}" if tool.color else None,

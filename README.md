@@ -73,8 +73,9 @@ symlinks rather than copies, so `git pull` updates the module too.
 ```ini
 [knomi_serial T0_knomi]  # a named device like this, or a bare [knomi_serial]
 serial:  # Path to the serial port for the Knomi_Serial device.
-tool:    # Which tool this screen belongs to, e.g. T0. Optional; needed only for
-         # KNOMI_TOOL to address this screen. `T0`, `t0` and `0` are equivalent.
+tool:    # Which tool this screen belongs to, e.g. T0. Optional. It sets the
+         # tag the screen shows, and lets KNOMI_TOOL address this screen by
+         # tool number as well as by name. `T0`, `t0` and `0` are equivalent.
 
 heater_hotend: extruder  # Name of the hotend heater.
 heater_bed: heater_bed   # Name of the bed heater.
@@ -156,15 +157,29 @@ on which board the switch is wired to:
 ## Telling the screens about the job
 
 ```
-KNOMI_TOOL TOOL=0 [USED=1] [COLOR=FF8800] [TYPE=PLA]
+KNOMI_TOOL [SCREEN=T0_knomi | TOOL=0] [USED=1] [COLOR=FF8800] [TYPE=PLA]
 ```
 
 | Parameter | Value | If omitted |
 | --- | --- | --- |
-| `TOOL` | Which screen, matched against its `tool:`. `T0`, `t0` and `0` are equivalent. | **Required** |
+| `SCREEN` | Which screen, by section name — `[knomi_serial T0_knomi]` is `T0_knomi`, the way `[fan_generic my_fan]` is `my_fan`. | See below |
+| `TOOL` | Which screen, by its `tool:` value. `T0`, `t0` and `0` are equivalent. May match several screens. | See below |
 | `USED` | `0` or `1` — whether the running job uses this tool. Decides whether the screen sleeps. | Unchanged |
 | `COLOR` | Filament colour as `RRGGBB`, leading `#` allowed. Empty clears it back to unknown. | Unchanged |
 | `TYPE` | Material name, up to 15 characters. | Unchanged |
+
+**On one screen you need neither** — there is nothing to disambiguate. With
+more than one, give exactly one of them; the error lists what is configured.
+
+The two forms exist because two different callers need different things.
+`SCREEN=` names the object, which is what Klipper does everywhere else, and is
+the only form that reaches a section declaring no `tool:` at all. `TOOL=` is the
+only form a slicer can emit generically — `TOOL={i}` sits in the same loop as
+`filament_colour[i]`, so the macro writes itself, where naming screens means
+writing that mapping out by hand.
+
+`TOOL=` deliberately matches *every* screen declaring it, so a spare display of
+the same tool follows the same spool.
 
 `USED` is what decides whether a screen sleeps. The host is *told* which tools a
 job uses rather than inferring it from nozzle temperature, because temperature
@@ -173,9 +188,9 @@ the chamber — with ooze prevention dropping a docked tool by 100 °C, and a
 chamber at 60 °C, those two sit close enough together that no threshold splits
 them.
 
-Every parameter except `TOOL` is optional, so one fact can be changed without
-restating the others, and the command is safe to repeat. That makes mid-job
-reassignment ordinary rather than a special case:
+Every parameter is optional, so one fact can be changed without restating the
+others, and the command is safe to repeat. That makes mid-job reassignment
+ordinary rather than a special case:
 
 ```gcode
 # print start, one per tool - Orca knows all three from is_extruder_used[],
@@ -185,6 +200,9 @@ KNOMI_TOOL TOOL=0 USED=1 COLOR={filament_colour[0]} TYPE={filament_type[0]}
 # T0 jammed, hand the rest of the job to T4
 KNOMI_TOOL TOOL=0 USED=0
 KNOMI_TOOL TOOL=4 USED=1 COLOR=FF0000 TYPE=ABS
+
+# one display, no tool: declared - nothing to name
+KNOMI_TOOL COLOR=9572BF TYPE=ABS
 ```
 
 `USED` returns to true for every tool when a print ends, so the next job starts
@@ -223,6 +241,7 @@ and to the Moonraker API as `printer["knomi_serial T0_knomi"]` (or
 | `module_version` | Version of this Klipper module. |
 | `protocol_version` | Wire format version this module speaks. |
 | `config_crc` | CRC32 of the config this module is holding. |
+| `screen_name` | What `KNOMI_TOOL SCREEN=` addresses this section as. |
 | `tool` | Normalised `tool:` value, e.g. `0`. `None` if unset. |
 | `used` | Whether the running job uses this tool. |
 | `filament_color` | Loaded filament colour as `RRGGBB`, or `None`. |

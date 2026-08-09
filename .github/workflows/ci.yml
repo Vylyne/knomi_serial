@@ -18,14 +18,21 @@ jobs:
   # without a matching change to _STATE_FMT compiles clean, installs clean, and
   # produces a display reading every field from the wrong offset.
   protocol:
-    name: Protocol contract
+    name: Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python tests/test_protocol.py
+      - name: Run every test
+        run: |
+          status=0
+          for test in tests/test_*.py; do
+            echo "== $test"
+            python "$test" || status=1
+          done
+          exit $status
 
   lint:
     name: Python lint

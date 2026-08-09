@@ -313,8 +313,11 @@ See [docs/protocol.md](docs/protocol.md) for how it works.
 ### Checks
 
 ```bash
-python tests/test_protocol.py   # firmware and module agree about the wire
-ruff check .                    # Python lint
+pip install -r requirements-dev.txt
+
+python tests/test_protocol.py     # firmware and module agree about the wire
+python tests/test_addressing.py   # which screen a KNOMI_TOOL lands on
+ruff check .                      # Python lint
 pio run -e knomi -e knomi_toolchanger
 ```
 

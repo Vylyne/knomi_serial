@@ -1,0 +1,14 @@
+# Everything the tests, the linter and the bench scripts need.
+#
+#     pip install -r requirements-dev.txt
+#
+# pyserial is a real runtime dependency of the Klipper module, not just of the
+# scripts - knomi_serial.py imports it at module scope, so anything that imports
+# the module needs it, tests included. A Klipper host already has it; a CI
+# runner does not, which is how its absence went unnoticed until the first push.
+#
+# PlatformIO is deliberately not here. It is the firmware toolchain rather than
+# a Python dependency of this code, it pulls in a great deal, and the CI job
+# that needs it installs it on its own.
+pyserial>=3.5
+ruff>=0.6

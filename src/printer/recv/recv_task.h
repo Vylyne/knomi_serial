@@ -17,6 +17,11 @@ void recv_task(void *param);
 //: hour ago looks exactly like one at 55%.
 uint32_t link_age_ms();
 
+//: Whether the host has asked for a screenshot since this was last called.
+//: Reading it clears it. Called from the LVGL task, which is the only place a
+//: capture can be started from.
+bool consume_snapshot_request();
+
 }
 }
 

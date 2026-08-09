@@ -26,6 +26,7 @@ at a time, so any amount of noise between frames is recovered from.
 | 0x01 | `STATE`   | every 100 ms                                |
 | 0x02 | `CONFIG`  | when the device asks                        |
 | 0x03 | `MESSAGE` | when there is something to tell the operator |
+| 0x04 | `SNAPSHOT` | when a human asks for a screenshot |
 
 A device that does not recognise a type skips it using `LEN` and stays in sync.
 That is the reason the length is on the wire at all: it lets the two ends
@@ -174,6 +175,35 @@ to move this somewhere rather than simply drop it.
 The device also writes its own faults here: `SHORT FRAME`, `BAD FRAME`,
 `MALFORMED PACKET`, `PROTO MISMATCH`.
 
+## `SNAPSHOT` — no payload
+
+Send back a picture of the glass. The display has no network, no filesystem to
+dump to and no second port, so the frame returns the way everything else does:
+as lines of base64 on the link that is already open.
+
+    KNOMI_CMD:SNAP:BEGIN:240,240,RGB565LE
+    KNOMI_CMD:SNAP:<512 chars of base64>     x300
+    KNOMI_CMD:SNAP:END
+
+384 raw bytes per line. About fourteen seconds for a 240×240 frame, during which
+the UI is doing nothing else — a developer and documentation tool, not something
+to poll.
+
+The frame is collected in the flush callback rather than with `lv_snapshot`.
+Every pixel that reaches the panel already passes through there, so this needs
+no second render pass, no `LV_USE_SNAPSHOT`, and no draw buffer carved out of
+LVGL's 64k arena — and it captures what was actually displayed rather than a
+re-rendering of what should have been. It lands in PSRAM, 8MB of which is
+otherwise unused on this part. `capture_begin` invalidates the screen first,
+because LVGL only renders what is dirty and a still screen would otherwise
+produce nothing at all.
+
+Raw RGB565 rather than anything compressed: PNG on the device would want a
+deflate implementation and the RAM to run it, to halve a transfer that happens
+when somebody types a command. `scripts/screenshot.py` does the conversion,
+where zlib is already in the standard library, and masks the corners the round
+bezel hides.
+
 ## Upstream: `KNOMI_CMD:`
 
 One line per message, newline-terminated:
@@ -184,6 +214,7 @@ One line per message, newline-terminated:
     KNOMI_CMD:MOVE:<axis><sign>     jog, e.g. MOVE:X+
     KNOMI_CMD:CFG?                  send config
     KNOMI_CMD:RPT:<k=v;k=v;...>     status report, every 2 s
+    KNOMI_CMD:SNAP:...              screenshot, see above
 
 Reports are parsed permissively in both directions: unknown keys from newer
 firmware are ignored, and keys missing from older firmware simply stay absent

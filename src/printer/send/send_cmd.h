@@ -25,6 +25,14 @@ void send_report(const char *fields);
 //: stops matching the config we hold. Rate limited by printer::config.
 void send_config_request();
 
+//: Write one line straight out, bypassing the queue.
+//:
+//: For the screenshot, which is three hundred lines of base64 and would sit in
+//: the queue as three hundred heap-allocated strings before any of it moved.
+//: Takes the same lock the queue drain does, so the two cannot interleave
+//: mid-line.
+void send_line(const char *body);
+
 void send_cmd(const char *cmd);
 
 }

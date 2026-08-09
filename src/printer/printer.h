@@ -35,6 +35,10 @@ enum class Frame : uint8_t {
   kConfig = 0x02,
   //: Something to show the operator - currently the reason Klipper shut down.
   kMessage = 0x03,
+  //: Send back a picture of the glass. Carries no payload; see
+  //: scripts/screenshot.py. A developer and documentation tool - it holds the
+  //: serial link for about fourteen seconds.
+  kSnapshot = 0x04,
 };
 
 static const unsigned int kFilamentTypeMaxLen = 15;

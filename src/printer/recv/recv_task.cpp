@@ -43,6 +43,17 @@ namespace printer
     //: When the last valid state frame landed. Zero means none ever has.
     static volatile uint32_t _last_state_ms = 0;
 
+    //: A snapshot has been asked for and not yet started.
+    static volatile bool _snapshot_wanted = false;
+
+    //: Whether the message on screen is one of ours rather than the host's.
+    //:
+    //: A local fault - a malformed frame, a length that made no sense - is only
+    //: true until the link recovers. Left standing it outlives its cause by
+    //: hours and turns up on the next shutdown screen as though it were the
+    //: reason Klipper stopped. A message the *host* sent is not ours to expire.
+    static bool _message_is_fault = false;
+
     static void _fault(const char *text);
     static bool _footer_at(size_t len);
     static void _take_state(size_t len);
@@ -105,6 +116,12 @@ namespace printer
           case Frame::kMessage:
             _take_message(len);
             break;
+          case Frame::kSnapshot:
+            // Flagged, not acted on: capturing means invalidating the screen
+            // and reading the flush callback, both of which belong to the
+            // LVGL task.
+            _snapshot_wanted = true;
+            break;
           default:
             // A newer host sending a frame this build has no name for is not an
             // error. Skipping it is the whole point of carrying a length.
@@ -151,7 +168,13 @@ namespace printer
         //
         // A fixed-width field the host zero-pads, but a frame that arrived
         // short could still leave it unterminated.
-        state->filament_type[printer::kFilamentTypeMaxLen] = '\0'; });
+        state->filament_type[printer::kFilamentTypeMaxLen] = '\0';
+
+        // A good frame is proof the fault that raised the last message is over.
+        if (_message_is_fault) {
+          _message_is_fault = false;
+          state->message[0] = '\0';
+        } });
 
       _last_state_ms = millis();
 
@@ -162,6 +185,16 @@ namespace printer
       {
         send::send_config_request();
       }
+    }
+
+    bool consume_snapshot_request()
+    {
+      if (!_snapshot_wanted)
+      {
+        return false;
+      }
+      _snapshot_wanted = false;
+      return true;
     }
 
     uint32_t link_age_ms()
@@ -181,6 +214,7 @@ namespace printer
         len = printer::kMessageMaxLen;
       }
       _payload_len = len;
+      _message_is_fault = false;
       write([](printer::State *state)
             {
         memcpy(state->message, _buf, _payload_len);
@@ -190,6 +224,7 @@ namespace printer
     static void _fault(const char *text)
     {
       _fault_text = text;
+      _message_is_fault = true;
       write([](printer::State *state)
             {
         state->status = printer::Status::kDisconnected;

@@ -1,10 +1,33 @@
 #include "haze.h"
 
+#include "board_conf.h"
 #include "ui/theme.h"
 #include "user_conf.h"
 
 namespace ui {
 namespace haze {
+
+lv_color_t background_at(lv_obj_t *scr, int32_t y) {
+  if (!scr) {
+    return lv_color_black();
+  }
+
+  lv_color_t top = lv_obj_get_style_bg_color(scr, LV_PART_MAIN);
+  if (lv_obj_get_style_bg_grad_dir(scr, LV_PART_MAIN) != LV_GRAD_DIR_VER) {
+    return top;
+  }
+  lv_color_t bottom = lv_obj_get_style_bg_grad_color(scr, LV_PART_MAIN);
+
+  if (y < 0) {
+    y = 0;
+  }
+  if (y > RES_V - 1) {
+    y = RES_V - 1;
+  }
+  // LV_GRAD_DIR_VER runs bg_color at the top edge to bg_grad_color at the
+  // bottom, linearly, with the default stops at 0 and 255.
+  return lv_color_mix(bottom, top, (uint8_t)(y * 255 / (RES_V - 1)));
+}
 
 void apply(lv_obj_t *scr, const printer::State &state) {
   if (!scr) {

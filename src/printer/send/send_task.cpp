@@ -76,6 +76,15 @@ void send_config_request() {
   send_cmd(Commands::kConfigRequest);
 }
 
+void send_line(const char *body) {
+  if (!_semaphore) {
+    return;
+  }
+  xSemaphoreTake(_semaphore, portMAX_DELAY);
+  _send(body);
+  xSemaphoreGive(_semaphore);
+}
+
 void send_cmd(const char *cmd) {
   // The mutex is created by send_task, which starts alongside the task that
   // receives packets - so a config request fired by the very first frame can

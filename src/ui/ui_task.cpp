@@ -4,6 +4,7 @@
 #include <lvgl.h>
 #include <stdio.h>
 
+#include "board_conf.h"
 #include "display/display.h"
 #include "display/cst816s.h"
 #include "printer/config.h"
@@ -30,6 +31,7 @@ namespace ui
   };
 
   void _send_report(const char *sleep_state, const RenderStats &stats);
+  void _send_snapshot();
 
   void ui_task(void *param)
   {
@@ -48,6 +50,8 @@ namespace ui
 
     uint32_t busy_us = 0;
     uint32_t peak_us = 0;
+
+    bool _snapshot_pending = false;
 
     while (true)
     {
@@ -135,6 +139,22 @@ namespace ui
             _last_used = state.used;
             ui::update(state); });
 
+      // A screenshot is two steps a frame apart: ask LVGL to redraw everything,
+      // then collect it once the flush callback has seen the whole screen.
+      if (printer::recv::consume_snapshot_request())
+      {
+        _snapshot_pending = display::capture_begin();
+        if (!_snapshot_pending)
+        {
+          printer::send::send_line("SNAP:ERR:no psram");
+        }
+      }
+      if (_snapshot_pending && display::capture_complete())
+      {
+        _snapshot_pending = false;
+        _send_snapshot();
+      }
+
       // Report our own state upstream. This repeats rather than announcing once
       // at boot so the host recovers the version and UI state after a Klipper
       // restart or a device reset, without needing a handshake.
@@ -157,6 +177,68 @@ namespace ui
 
       delay(5);
     }
+  }
+
+  // A frame of the glass, as base64 over the same line-based uplink everything
+  // else uses.
+  //
+  // Raw RGB565 rather than anything compressed: PNG on the device would want a
+  // deflate implementation and the RAM to run it, to save maybe half of a
+  // transfer that happens when somebody types a command. The host turns it into
+  // a PNG, where zlib is already sitting in the standard library.
+  //
+  // 384 bytes a line, which is 512 of base64. Small enough that the line buffer
+  // is stack-sized, large enough that the ten-byte prefix is noise rather than
+  // a third of the traffic.
+  void _send_snapshot()
+  {
+    static const char *kB64 =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    static const uint32_t kRaw = 384;
+
+    const uint16_t *frame = display::capture_frame();
+    if (!frame)
+    {
+      printer::send::send_line("SNAP:ERR:no frame");
+      return;
+    }
+
+    char begin[64];
+    snprintf(
+        begin, sizeof(begin), "SNAP:BEGIN:%d,%d,RGB565LE", (int)RES_H, (int)RES_V);
+    printer::send::send_line(begin);
+
+    const uint8_t *src = (const uint8_t *)frame;
+    uint32_t total = (uint32_t)RES_H * RES_V * sizeof(uint16_t);
+    char line[6 + (kRaw / 3) * 4 + 8];
+
+    for (uint32_t at = 0; at < total; at += kRaw)
+    {
+      uint32_t n = total - at < kRaw ? total - at : kRaw;
+      char *out = line;
+      *out++ = 'S'; *out++ = 'N'; *out++ = 'A'; *out++ = 'P'; *out++ = ':';
+
+      for (uint32_t i = 0; i < n; i += 3)
+      {
+        uint32_t bits = (uint32_t)src[at + i] << 16;
+        if (i + 1 < n) bits |= (uint32_t)src[at + i + 1] << 8;
+        if (i + 2 < n) bits |= (uint32_t)src[at + i + 2];
+        *out++ = kB64[(bits >> 18) & 0x3F];
+        *out++ = kB64[(bits >> 12) & 0x3F];
+        *out++ = (i + 1 < n) ? kB64[(bits >> 6) & 0x3F] : '=';
+        *out++ = (i + 2 < n) ? kB64[bits & 0x3F] : '=';
+      }
+      *out = '\0';
+      printer::send::send_line(line);
+
+      // The UART blocks once its buffer is full, so this is already paced by
+      // the link - but yielding keeps the receive task fed and the watchdog
+      // quiet through the fourteen seconds this takes.
+      delay(1);
+    }
+
+    printer::send::send_line("SNAP:END");
+    display::capture_end();
   }
 
   void _send_report(const char *sleep_state, const RenderStats &stats)

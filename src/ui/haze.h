@@ -20,6 +20,19 @@ namespace haze {
 // screen is what is showing while you wait on the number.
 void apply(lv_obj_t *scr, const printer::State &state);
 
+//: What the haze is painting at screen row `y`.
+//:
+//: For anything that has to draw its own background rather than let this one
+//: show through. The printing page's wave band is opaque - it paints every
+//: pixel of the strip it covers - so the part above the waterline has to
+//: reproduce what would have been behind it. Painting black there punched a
+//: black notch through the glow in every trough, worst near the bottom of the
+//: glass where the gradient is strongest.
+//:
+//: Read back off the screen's own style rather than recomputed from
+//: temperature, so it cannot disagree with what apply() actually set.
+lv_color_t background_at(lv_obj_t *scr, int32_t y);
+
 }
 }
 

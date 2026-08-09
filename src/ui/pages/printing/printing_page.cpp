@@ -7,6 +7,7 @@
 #include "board_conf.h"
 #include "printer/send/send_cmd.h"
 #include "ui/corner.h"
+#include "ui/haze.h"
 #include "ui/theme.h"
 #include "user_conf.h"
 
@@ -28,7 +29,12 @@ static lv_obj_t *_pct = nullptr;
 static const int32_t kWaveBand = 2 * WAVE_AMP;
 static uint16_t _wave_buf[RES_H * kWaveBand];
 static uint16_t _wave_fg = 0;
-static uint16_t _wave_bg = 0;
+
+//: What is behind the band, row by row. Not one colour: the heat haze is a
+//: vertical gradient on the screen, so the strip this canvas covers is a
+//: different shade at its top than at its bottom, and both move as the
+//: waterline rises and as the nozzle warms.
+static uint16_t _row_bg[kWaveBand];
 
 //: Height of the surface at each column, so a frame identical to the last one
 //: can be skipped before anything is painted or flushed.
@@ -323,6 +329,21 @@ static void _paint_wave(bool force) {
   // it makes the tail of the easing - where amplitude is creeping to zero -
   // cost almost nothing.
   bool changed = force || !_surface_valid;
+
+  // Resample what is behind us. Cheap - sixteen mixes against 3840 pixel
+  // writes - and it has to happen every frame because the thing it depends on
+  // moves for two independent reasons: the band slides up as progress rises,
+  // and the gradient itself restyles as the nozzle warms.
+  lv_obj_t *scr = lv_obj_get_screen(_wave);
+  int32_t band_top = RES_V - _fill_top - kWaveBand;
+  for (int32_t y = 0; y < kWaveBand; y++) {
+    uint16_t c = lv_color_to_u16(haze::background_at(scr, band_top + y));
+    if (c != _row_bg[y]) {
+      _row_bg[y] = c;
+      changed = true;
+    }
+  }
+
   for (int32_t x = 0; x < RES_H; x++) {
     int32_t s = _sine(_phase_fx + x * kWavePerPixel);
     int32_t top = WAVE_AMP - (_amp_fx * s) / (16 * 100);
@@ -345,9 +366,9 @@ static void _paint_wave(bool force) {
   for (int32_t y = 0; y < kWaveBand; y++) {
     uint16_t *row = _wave_buf + y * RES_H;
     for (int32_t x = 0; x < RES_H; x++) {
-      // Above the surface is the page's own ground, which is black - the same
-      // thing that would show if this band were not here at all.
-      row[x] = ((int32_t)_surface[x] > y) ? _wave_bg : _wave_fg;
+      // Above the surface, reproduce exactly what would have shown through if
+      // this band were not here at all.
+      row[x] = ((int32_t)_surface[x] > y) ? _row_bg[y] : _wave_fg;
     }
   }
 
@@ -382,13 +403,15 @@ static void _wave_tick(lv_timer_t *timer) {
     _amp_fx += target_fx > _amp_fx ? 1 : -1;
   }
 
-  // A flat surface that was already flat is the idle case, and it must cost
-  // nothing at all - this page sits at 28% while printing and there is no
-  // reason for a finished job to keep paying for waves it is not making.
-  if (_amp_fx == 0 && was_fx == 0) {
-    return;
-  }
-
+  // No early return for a surface that is flat and was already flat, tempting
+  // as it is. The band is opaque, so it owes the screen an accurate copy of the
+  // gradient behind it even when nothing is moving - and that gradient restyles
+  // as the nozzle warms. Skipping the tick left a stale strip of old glow
+  // sitting across the waterline.
+  //
+  // Costing nothing in that case is _paint_wave's job instead: it compares what
+  // it is about to draw against what it drew last time and stops there.
+  (void)was_fx;
   _phase_fx += flow_fx * WAVE_SPEED / 256;
   _paint_wave(false);
 }
@@ -506,7 +529,6 @@ void printer_update(const printer::State &state) {
     lv_color_t colour = theme::filament(state);
     lv_obj_set_style_bg_color(_fill, colour, LV_PART_MAIN);
     _wave_fg = lv_color_to_u16(colour);
-    _wave_bg = lv_color_to_u16(lv_color_black());
     // Forced: the surface has not moved, but every pixel of it is a different
     // colour, so the skip-if-unchanged test would wrongly say there is nothing
     // to do.

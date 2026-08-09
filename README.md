@@ -9,6 +9,25 @@ This is a fork of [ruiqimao/zerod](https://github.com/ruiqimao/zerod). I forked 
 Knomi_Serial is an alternative firmware for the BTT Knomi V2 and other similar displays that replaces the
 network-reliant Moonraker connection with a direct serial connection to the Klipper host.
 
+| Tool, at temperature | Heating | Printing | Shutdown |
+| --- | --- | --- | --- |
+| ![](docs/img/idle.png) | ![](docs/img/heating.png) | ![](docs/img/printing.png) | ![](docs/img/shutdown.png) |
+
+Colour carries three separate things and never mixes them. The filament is
+whatever the slicer loaded, and it is the fill that rises with progress — its
+surface moving with the extruder, so the screen says the machine is *working*
+and not merely part-way through. Heat is a gradient behind everything, anchored
+to the target rather than to a temperature: 60°C on the way to 65 is nearly
+there, 60°C on the way to 250 has barely started. The machine's own accent —
+pink here, yours in `printer.cfg` — is reserved for chrome that is about the
+printer rather than the print.
+
+Those are real captures, pulled off the glass over the serial link:
+
+```
+python scripts/screenshot.py COM5 --drive printing -o docs/img/printing.png
+```
+
 ### Installation
 
 Knomi_Serial firmware can be built and flahsed using [PlatformIO](https://platformio.org/).

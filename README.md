@@ -11,6 +11,10 @@ machine, and a `klippy_extras` module talks to it directly.
 | :---: | :---: | :---: | :---: | :---: |
 | <img src="docs/img/waiting.png" width="130"> | <img src="docs/img/heating.png" width="130"> | <img src="docs/img/idle.png" width="130"> | <img src="docs/img/printing.png" width="130"> | <img src="docs/img/shutdown.png" width="130"> |
 
+<sup>Real captures off the glass — `python scripts/screenshot.py COM5 --all`.
+Taken with the stock accent, `color_machine: FFA7C4`, against a `9572BF`
+filament, so that the two are visibly not the same thing.</sup>
+
 Colour carries three separate things and never mixes them.
 
 **Filament** is whatever the slicer loaded — the purple above — and it is the

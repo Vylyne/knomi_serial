@@ -2,8 +2,11 @@
 #include "recv_state.h"
 
 #include <Arduino.h>
+#include <string.h>
 
+#include "printer/config.h"
 #include "printer/printer.h"
+#include "printer/send/send_cmd.h"
 
 namespace printer
 {
@@ -12,8 +15,10 @@ namespace printer
 
     static const uint32_t _HEADER = 0x83ad83ad;
     static const uint32_t _FOOTER = 0xf007f007;
-    static const int _BUF_SIZE = sizeof(printer::State) + sizeof(_FOOTER);
-    static char _buf[_BUF_SIZE];
+
+    //: The largest payload any frame carries, plus the footer that follows it.
+    static const size_t _BUF_SIZE = printer::kMaxPayload + sizeof(_FOOTER);
+    static uint8_t _buf[_BUF_SIZE];
 
     static State _state;
     static SemaphoreHandle_t _semaphore = nullptr;
@@ -29,7 +34,16 @@ namespace printer
     //: the printer sending nothing at all.
     static volatile bool _dirty = true;
 
-    bool _validate_footer();
+    //: Arguments for the captureless lambdas below. write() takes a
+    //: std::function, and a capturing lambda would put a heap allocation in the
+    //: path of every packet.
+    static const char *_fault_text = nullptr;
+    static size_t _payload_len = 0;
+
+    static void _fault(const char *text);
+    static bool _footer_at(size_t len);
+    static void _take_state(size_t len);
+    static void _take_message(size_t len);
 
     void recv_task(void *param)
     {
@@ -48,19 +62,70 @@ namespace printer
           }
           header = 0;
 
-          size_t len = Serial.readBytes(_buf, _BUF_SIZE);
-          if (len < _BUF_SIZE || !_validate_footer())
+          // Type and length, so a frame can be skipped without knowing what is
+          // in it. Proto 2 had neither: the length was implied by the one
+          // struct it could carry, which is why anything the screen needed had
+          // to be in the ten-times-a-second packet or nowhere.
+          uint8_t head[3];
+          if (Serial.readBytes(head, sizeof(head)) < sizeof(head))
           {
-            write([](printer::State *state)
-                  {
-          state->status = printer::Status::kDisconnected;
-          strcpy(state->gcodes, "MALFORMED\nPACKET"); });
+            _fault("SHORT\nFRAME");
+            continue;
+          }
+          Frame type = (Frame)head[0];
+          size_t len = ((size_t)head[1] << 8) | head[2];
+
+          if (len > printer::kMaxPayload)
+          {
+            // Either a corrupt length or a host that speaks a protocol with
+            // bigger frames than this build knows about. Both are recovered
+            // from the same way: drop it and resynchronise on the next header.
+            _fault("BAD\nFRAME");
             continue;
           }
 
-          write([](printer::State *state)
-                {
-        memcpy((char*) state, _buf, sizeof(printer::State));
+          size_t want = len + sizeof(_FOOTER);
+          if (Serial.readBytes(_buf, want) < want || !_footer_at(len))
+          {
+            _fault("MALFORMED\nPACKET");
+            continue;
+          }
+
+          switch (type)
+          {
+          case Frame::kState:
+            _take_state(len);
+            break;
+          case Frame::kConfig:
+            config::apply(_buf, len);
+            break;
+          case Frame::kMessage:
+            _take_message(len);
+            break;
+          default:
+            // A newer host sending a frame this build has no name for is not an
+            // error. Skipping it is the whole point of carrying a length.
+            break;
+          }
+        }
+        delay(5);
+      }
+    }
+
+    static void _take_state(size_t len)
+    {
+      if (len != printer::kStateWireSize)
+      {
+        // A well-formed frame of the wrong shape, which means the host is
+        // speaking a different version of this protocol. Say so rather than
+        // memcpying whatever arrived over the struct.
+        _fault("PROTO\nMISMATCH");
+        return;
+      }
+
+      write([](printer::State *state)
+            {
+        memcpy((char*) state, _buf, printer::kStateWireSize);
         state->status = (printer::Status) ntohl((uint32_t) state->status);
         state->hotend_temp = ntohl(state->hotend_temp);
         state->hotend_target = ntohl(state->hotend_target);
@@ -73,14 +138,48 @@ namespace printer
         state->progress = ntohl(state->progress);
         state->tool_number = ntohl(state->tool_number);
         state->filament_color = ntohl(state->filament_color);
-        state->tram_type = (printer::TramType) ntohl((uint32_t) state->tram_type);
-        // Both strings are fixed-width fields the host zero-pads, but a
-        // truncated or malformed packet could still leave them unterminated.
-        state->filament_type[printer::kFilamentTypeMaxLen] = '\0';
-        state->gcodes[sizeof(state->gcodes) - 1] = '\0'; });
-        }
-        delay(5);
+        state->flow = ntohl(state->flow);
+        state->eta = ntohl(state->eta);
+        state->elapsed = ntohl(state->elapsed);
+        state->layer = ntohl(state->layer);
+        state->layer_total = ntohl(state->layer_total);
+        state->config_crc = ntohl(state->config_crc);
+        // tram_type is a single byte now, so there is nothing to swap.
+        //
+        // A fixed-width field the host zero-pads, but a frame that arrived
+        // short could still leave it unterminated.
+        state->filament_type[printer::kFilamentTypeMaxLen] = '\0'; });
+
+      // Read back without the lock, which is safe because this task is the only
+      // writer - the lock exists to stop the UI seeing a half-updated struct,
+      // not to protect us from ourselves.
+      if (config::should_request(_state.config_crc, millis()))
+      {
+        send::send_config_request();
       }
+    }
+
+    static void _take_message(size_t len)
+    {
+      if (len > printer::kMessageMaxLen)
+      {
+        len = printer::kMessageMaxLen;
+      }
+      _payload_len = len;
+      write([](printer::State *state)
+            {
+        memcpy(state->message, _buf, _payload_len);
+        state->message[_payload_len] = '\0'; });
+    }
+
+    static void _fault(const char *text)
+    {
+      _fault_text = text;
+      write([](printer::State *state)
+            {
+        state->status = printer::Status::kDisconnected;
+        strncpy(state->message, _fault_text, printer::kMessageMaxLen);
+        state->message[printer::kMessageMaxLen] = '\0'; });
     }
 
     void try_read(std::function<void(const State &)> cb)
@@ -109,10 +208,13 @@ namespace printer
       xSemaphoreGive(_semaphore);
     }
 
-    bool _validate_footer()
+    static bool _footer_at(size_t len)
     {
-      uint32_t *footer = (uint32_t *)(_buf + _BUF_SIZE - 4);
-      return ntohl(*footer) == _FOOTER;
+      // memcpy rather than a cast: the footer sat at a fixed, aligned offset
+      // when there was one frame size, and now sits wherever the payload ends.
+      uint32_t footer = 0;
+      memcpy(&footer, _buf + len, sizeof(footer));
+      return ntohl(footer) == _FOOTER;
     }
 
   }

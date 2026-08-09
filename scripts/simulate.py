@@ -24,9 +24,11 @@ writing to the same port and the screen would see interleaved packets.
 """
 
 import argparse
+import math
 import os
 import sys
 import time
+import zlib
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "klippy_extras"))
@@ -80,10 +82,35 @@ class Sim:
         self.clock = 0.0
         self.paused = False
         self.shutdown = None
+        self.sent_shutdown = None
         self.homed = {"X": False, "Y": False, "Z": False}
         self.pos = {"X": 0.0, "Y": 0.0, "Z": 0.0}
         self.busy_until = 0.0
         self.events = []
+
+        # What a printer.cfg would have pushed. Everything is marked present so
+        # the bench exercises the override path rather than silently relying on
+        # the firmware's own defaults for every field.
+        self.config = k.DeviceConfig(
+            present=(
+                k._HAS_COLOR_MACHINE
+                | k._HAS_COLOR_UNKNOWN
+                | k._HAS_DIM_MS
+                | k._HAS_SLEEP_MS
+                | k._HAS_BRIGHTNESS
+                | k._HAS_DIM_BRIGHTNESS
+                | k._HAS_GCODES
+            ),
+            color_machine=int(args.machine_color, 16),
+            color_filament_unknown=0x5A5A5A,
+            dim_ms=int(args.dim_time * 1000),
+            sleep_ms=int(args.sleep_time * 1000),
+            brightness=8,
+            dim_brightness=3,
+            gcodes=b"HOME\nQGL\nPURGE",
+        )
+        self.config_crc = zlib.crc32(k.config_payload(self.config))
+        self.config_sends = 0
 
     # -- time ----------------------------------------------------------
 
@@ -109,7 +136,7 @@ class Sim:
         """A KNOMI_CMD the display sent, minus its prefix."""
         if body == b"STOP":
             # Klipper uppercases the first line of the shutdown message and
-            # sends it in the gcodes field; the shutdown screen renders that.
+            # sends it as a message frame; the shutdown screen renders that.
             self.shutdown = "STOP REQUESTED BY KNOMI_SERIAL"
             self.note("STOP -> shutdown")
             return
@@ -197,6 +224,39 @@ class Sim:
         f = t / done
         return ("finished", 100.0, 245 - 200 * f, 0, 100 - 70 * f, 0)
 
+    def flow(self, label):
+        """Extrusion rate in micrometres per second, as motion_report would give it.
+
+        Only while actually printing, and never steady: real flow rises and falls
+        with perimeter speed and stops dead at every travel move. A constant
+        number would let a wave animation look right while being driven by
+        something that could not happen.
+        """
+        if self.args.flow is not None:
+            return int(self.args.flow)
+        if label != "printing" or self.paused:
+            return 0
+        # A slow swell for feature changes, a fast one for individual moves, and
+        # a travel move every few seconds where flow drops to nothing.
+        swell = 2600 + 900 * math.sin(self.clock / 4.1)
+        ripple = 250 * math.sin(self.clock * 3.7)
+        if (self.clock % 7.0) < 0.6:
+            return 0
+        # And the retraction that starts each of those travels.
+        if 0.6 <= (self.clock % 7.0) < 0.75:
+            return -4500
+        return int(swell + ripple)
+
+    def timing(self, label, progress):
+        """Seconds gone, seconds left, and the layer stack."""
+        if label != "printing":
+            return k._UNKNOWN, k._UNKNOWN, k._UNKNOWN, k._UNKNOWN
+        total = self.args.duration
+        elapsed = int(total * progress / 100.0)
+        eta = k._UNKNOWN if progress < 1.0 else int(total - elapsed)
+        layers = 180
+        return elapsed, eta, max(1, int(layers * progress / 100.0)), layers
+
     def state(self):
         args = self.args
         label, progress, hot, tgt, bed, bedt = self.phase()
@@ -204,7 +264,7 @@ class Sim:
         if self.shutdown is not None:
             return "shutdown", k.PrinterState(
                 status=k.PrinterStatus.SHUTDOWN,
-                gcodes=self.shutdown.encode("utf-8")[:k._GCODES_MAX_LEN],
+                config_crc=self.config_crc,
             )
 
         status = k.PrinterStatus.PRINTING if label == "printing" else k.PrinterStatus.IDLE
@@ -231,6 +291,8 @@ class Sim:
         if args.type is not None:
             ftype = args.type
 
+        elapsed, eta, layer, layer_total = self.timing(label, progress)
+
         return label, k.PrinterState(
             status=status,
             working=self.working,
@@ -251,9 +313,14 @@ class Sim:
             progress=progress,
             tool_number=args.tool,
             filament_color=int(colour, 16),
+            flow=self.flow(label) if args.active else 0,
+            eta=eta,
+            elapsed=elapsed,
+            layer=layer,
+            layer_total=layer_total,
+            config_crc=self.config_crc,
             tram_type=k.PrinterTramType.QGL,
             filament_type=ftype.encode("utf-8")[:15],
-            gcodes=b"HOME\nQGL\nPURGE",
         )
 
 
@@ -309,6 +376,13 @@ def drain(port, sim, seen):
                         f"WARNING: display speaks protocol {fields.get('proto')}, "
                         f"this encoder writes {k._PROTO_VERSION}. Reflash it."
                     )
+        elif body == b"CFG?":
+            # The device saw a config CRC it is not holding and asked. Klipper
+            # answers exactly this way, and this is the only path by which the
+            # macro list, the colours or the sleep timings ever reach a screen.
+            port.write(k.encode_config(sim.config))
+            sim.config_sends += 1
+            sim.note(f"CFG? -> sent config, crc {sim.config_crc:08X}")
         elif body.startswith(b"I2C:"):
             sim.note("i2c: " + body[4:].decode("utf-8", "replace"))
         else:
@@ -355,6 +429,14 @@ def main():
     p.add_argument("--hotend", type=float, help="pin hotend temperature")
     p.add_argument("--target", type=float, help="pin hotend target")
     p.add_argument("--chamber", type=float, default=0, help="chamber temperature")
+    p.add_argument("--flow", type=float,
+                   help="pin extrusion rate, micrometres/s (negative retracts)")
+    p.add_argument("--machine-color", "--machine-colour", dest="machine_color",
+                   default="FFA7C4", help="push a machine accent colour, RRGGBB")
+    p.add_argument("--dim-time", type=float, default=30.0,
+                   help="seconds of idle before the backlight drops (default 30)")
+    p.add_argument("--sleep-time", type=float, default=60.0,
+                   help="seconds of idle before the backlight goes out (default 60)")
     p.add_argument("--status", choices=("idle", "printing", "shutdown"))
     p.add_argument("--color", "--colour", dest="color", help="filament colour, RRGGBB")
     p.add_argument("--type", help="filament type, e.g. PLA")
@@ -378,12 +460,16 @@ def main():
         list_ports()
         return 2
 
-    if args.color:
-        args.color = args.color.strip().lstrip("#")
+    for name in ("color", "machine_color"):
+        value = getattr(args, name)
+        if not value:
+            continue
+        value = value.strip().lstrip("#")
         try:
-            int(args.color, 16)
+            int(value, 16)
         except ValueError:
-            return p.error(f"--color '{args.color}' is not hex")
+            return p.error(f"--{name.replace('_', '-')} '{value}' is not hex")
+        setattr(args, name, value)
 
     try:
         port = serial.Serial(args.port, args.baud, write_timeout=1.0)
@@ -402,6 +488,13 @@ def main():
             last = now
 
             label, state = sim.state()
+            # The reason for a shutdown is its own frame now, and is sent once
+            # rather than restated with every packet for as long as the machine
+            # stays down.
+            if sim.shutdown != sim.sent_shutdown:
+                sim.sent_shutdown = sim.shutdown
+                if sim.shutdown:
+                    port.write(k.encode_message(sim.shutdown))
             port.write(k.encode_state(state))
             drain(port, sim, seen)
 

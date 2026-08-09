@@ -6,6 +6,7 @@
 
 #include "display/display.h"
 #include "display/cst816s.h"
+#include "printer/config.h"
 #include "printer/printer.h"
 #include "printer/recv/recv_state.h"
 #include "printer/send/send_cmd.h"
@@ -33,7 +34,7 @@ namespace ui
   {
     init();
     display::init();
-    display::set_backlight(DISPLAY_BRIGHTNESS);
+    display::set_backlight(printer::config::get().brightness);
 
     static int32_t _last_hotend_temp = 0;
     static printer::Status _last_status = printer::Status::kDisconnected;
@@ -58,12 +59,17 @@ namespace ui
         peak_us = spent;
       }
 
+      // Timings and brightness come from the host so they can be changed in
+      // printer.cfg without a reflash, and fall back to what this build was
+      // compiled with until it says otherwise.
+      const printer::Config &conf = printer::config::get();
+
       if (display::cst816s::consume_touched())
       {
         last_active = millis();
         if (sleeping || dimmed)
         {
-          display::set_backlight(DISPLAY_BRIGHTNESS);
+          display::set_backlight(conf.brightness);
           sleeping = false;
           dimmed = false;
         }
@@ -87,7 +93,7 @@ namespace ui
       // a display that stayed off.
       if ((sleeping || dimmed) && keep_awake)
       {
-        display::set_backlight(DISPLAY_BRIGHTNESS);
+        display::set_backlight(conf.brightness);
         sleeping = false;
         dimmed = false;
         last_active = millis();
@@ -95,15 +101,15 @@ namespace ui
 
       if (!sleeping && !dimmed && !keep_awake)
       {
-        if (millis() - last_active > SLEEP_DIM_MS)
+        if (millis() - last_active > conf.dim_ms)
         {
-          display::set_backlight(SLEEP_DIM_BRIGHTNESS);
+          display::set_backlight(conf.dim_brightness);
           dimmed = true;
         }
       }
       if (!sleeping && !keep_awake)
       {
-        if (millis() - last_active > SLEEP_TIMEOUT_MS)
+        if (millis() - last_active > conf.sleep_ms)
         {
           display::set_backlight(0);
           sleeping = true;
@@ -155,6 +161,10 @@ namespace ui
         fields,
         sizeof(fields),
         "fw=%s;proto=%u;var=%s;sleep=%s;scr=%s;page=%d;"
+        // CRC of the config actually in force, so the host can see that what it
+        // sent is what the device is running rather than assuming the push
+        // landed.
+        "cfg=%08x;"
         "heap=%u;minheap=%u;up=%u;"
         // Everything past here is for judging what a heavier screen can afford:
         // how much of the frame budget the UI already spends, how long its worst
@@ -168,6 +178,7 @@ namespace ui
         sleep_state,
         screen_name(),
         page_index(),
+        (unsigned int)printer::config::held_crc(),
         (unsigned int)ESP.getFreeHeap(),
         (unsigned int)ESP.getMinFreeHeap(),
         (unsigned int)(millis() / 1000),

@@ -1,5 +1,6 @@
 #include "theme.h"
 
+#include "printer/config.h"
 #include "user_conf.h"
 
 namespace ui
@@ -38,7 +39,10 @@ namespace ui
 
     lv_color_t machine()
     {
-      return lv_color_hex(COLOR_MACHINE);
+      // From the host, defaulting to the compile-time value. This one is pure
+      // taste - the whole reason config carries anything at all is that not
+      // everybody wants a pink machine.
+      return lv_color_hex(printer::config::get().color_machine);
     }
 
     lv_color_t ink_on(lv_color_t ground)
@@ -114,7 +118,7 @@ namespace ui
       {
         // Not black: zero means the host has not told us, and rendering that as
         // black would be indistinguishable from genuinely black filament.
-        return lv_color_hex(COLOR_FILAMENT_UNKNOWN);
+        return lv_color_hex(printer::config::get().color_filament_unknown);
       }
       return lv_color_hex(state.filament_color);
     }

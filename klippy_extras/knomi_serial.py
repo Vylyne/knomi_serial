@@ -15,10 +15,17 @@ import enum
 import os
 import serial
 import struct
+import zlib
 
 _BAUD_RATE = 115200
 _HEADER = b"\x83\xad\x83\xad"
 _FOOTER = b"\xf0\x07\xf0\x07"
+
+#: Frame types, against `enum class Frame` in src/printer/printer.h. Every frame
+#: is HEADER(4) TYPE(1) LEN(2) PAYLOAD(LEN) FOOTER(4), network order throughout.
+_FRAME_STATE = 0x01
+_FRAME_CONFIG = 0x02
+_FRAME_MESSAGE = 0x03
 
 _RECV_PERIOD = 0.1
 _SEND_PERIOD = 0.1
@@ -36,20 +43,48 @@ _RECONNECT_PERIOD = 5.0
 
 _GCODES_MAX_LEN = 255
 _FILAMENT_TYPE_MAX_LEN = 15
+_MESSAGE_MAX_LEN = 127
 
-#: Wire format version for the state packet built by _send_state. Must be kept
-#: in sync with printer::kProtoVersion in src/printer/printer.h.
-_PROTO_VERSION = 2
+#: Sent where the host has no answer - an unsliced print with no layer count, a
+#: job too young to estimate. Distinct from zero, which is a real answer.
+_UNKNOWN = -1
 
-#: The state packet, field for field against `struct State` in
-#: src/printer/printer.h. `!` means network order and no padding of its own, so
-#: the one `x` is the struct's explicit padding byte - the thing keeping the
-#: int32 block 4-byte aligned on the device.
+#: Wire format version. Must be kept in sync with printer::kProtoVersion in
+#: src/printer/printer.h.
+#:
+#: 3: typed frames. Everything that does not change from tick to tick left the
+#:    state packet - which was most of it. See the note above _STATE_FMT.
+_PROTO_VERSION = 3
+
+#: The state frame's payload, field for field against `struct State` in
+#: src/printer/printer.h, down to and including filament_type. `!` means network
+#: order and no padding of its own, so the layout here is the struct's layout.
+#:
+#: 96 bytes, against proto 2's 332. The macro list was 256 of those and had not
+#: changed since Klipper started; at 10Hz it alone was 2.5 kB/s of an 11.5 kB/s
+#: link, spent restating a constant. It now goes in _CONFIG_FMT, sent when the
+#: device asks for it.
 #:
 #: Changing this means changing that struct, bumping _PROTO_VERSION, and
-#: updating the static_assert that pins its size.
-_STATE_FMT = "!I7?x10iII16s256s"
+#: updating the static_asserts that pin its size.
+_STATE_FMT = "!I7?B10iI5iI16s"
 _STATE_SIZE = struct.calcsize(_STATE_FMT)
+
+#: The config frame's payload, against `struct Config`. The two `x` are its
+#: explicit padding, keeping gcodes on a 4-byte boundary.
+_CONFIG_FMT = "!5I2B2x256s"
+_CONFIG_SIZE = struct.calcsize(_CONFIG_FMT)
+
+#: Bits of Config.present, against `enum ConfigHas`. A field whose bit is clear
+#: keeps whatever the firmware was built with, so printer.cfg overrides the
+#: defaults in user_conf.h rather than replacing them.
+_HAS_COLOR_MACHINE = 1 << 0
+_HAS_COLOR_UNKNOWN = 1 << 1
+_HAS_DIM_MS = 1 << 2
+_HAS_SLEEP_MS = 1 << 3
+_HAS_BRIGHTNESS = 1 << 4
+_HAS_DIM_BRIGHTNESS = 1 << 5
+_HAS_GCODES = 1 << 6
 
 #: Used only if the VERSION file cannot be found next to this module, which
 #: happens if knomi_serial.py was copied into klippy/extras rather than
@@ -67,6 +102,7 @@ _CMD_RESTART = b"RESTART"
 _CMD_GCODE = b"GCODE:"
 _CMD_MOVE = b"MOVE:"
 _CMD_REPORT = b"RPT:"
+_CMD_CONFIG_REQUEST = b"CFG?"
 
 #: Distinct from None, which is a legitimate "device sent no proto key" value.
 _UNSET = object()
@@ -85,6 +121,22 @@ def _module_version():
         return _FALLBACK_VERSION
 
 
+def encode_frame(frame_type, payload):
+    """Wrap a payload in the framing every message shares.
+
+    The type and length are what make more than one kind of message possible: a
+    device can skip a frame it has no name for instead of losing sync, which is
+    what lets a firmware and a host disagree about the protocol's edges without
+    disagreeing about the middle.
+    """
+    return (
+        _HEADER
+        + struct.pack("!BH", frame_type, len(payload))
+        + payload
+        + _FOOTER
+    )
+
+
 def encode_state(state):
     """A PrinterState as the bytes that go on the wire, framing included.
 
@@ -92,37 +144,70 @@ def encode_state(state):
     exact encoder Klipper uses. A second implementation would drift, and then a
     bench test would be exercising the test rig rather than the firmware.
     """
-    # The two trailing `s` fields pad with NULs and truncate on their own,
-    # which is exactly the fixed-width behaviour the device reads back.
-    return (
-        _HEADER
-        + struct.pack(
-            _STATE_FMT,
-            state.status.value,
-            state.working,
-            state.paused,
-            state.homed_x,
-            state.homed_y,
-            state.homed_z,
-            state.used,
-            state.active,
-            int(state.hotend_temp),
-            int(state.hotend_target),
-            int(state.bed_temp),
-            int(state.bed_target),
-            int(state.chamber_temp),
-            int(state.chamber_target),
-            int(state.mcu_temp),
-            int(state.mcu_target),
-            int(state.progress),
-            int(state.tool_number),
-            int(state.filament_color),
-            state.tram_type.value,
-            state.filament_type,
-            state.gcodes,
-        )
-        + _FOOTER
+    # The trailing `s` field pads with NULs and truncates on its own, which is
+    # exactly the fixed-width behaviour the device reads back.
+    payload = struct.pack(
+        _STATE_FMT,
+        state.status.value,
+        state.working,
+        state.paused,
+        state.homed_x,
+        state.homed_y,
+        state.homed_z,
+        state.used,
+        state.active,
+        state.tram_type.value,
+        int(state.hotend_temp),
+        int(state.hotend_target),
+        int(state.bed_temp),
+        int(state.bed_target),
+        int(state.chamber_temp),
+        int(state.chamber_target),
+        int(state.mcu_temp),
+        int(state.mcu_target),
+        int(state.progress),
+        int(state.tool_number),
+        int(state.filament_color),
+        int(state.flow),
+        int(state.eta),
+        int(state.elapsed),
+        int(state.layer),
+        int(state.layer_total),
+        int(state.config_crc),
+        state.filament_type,
     )
+    return encode_frame(_FRAME_STATE, payload)
+
+
+def encode_config(config):
+    """A DeviceConfig as the bytes that go on the wire, framing included."""
+    return encode_frame(_FRAME_CONFIG, config_payload(config))
+
+
+def config_payload(config):
+    """The config frame's payload alone, which is what gets hashed.
+
+    Separate from encode_config because the CRC has to be over exactly the bytes
+    the device will hash back, and the device only ever sees the payload.
+    """
+    return struct.pack(
+        _CONFIG_FMT,
+        config.present,
+        config.color_machine,
+        config.color_filament_unknown,
+        config.dim_ms,
+        config.sleep_ms,
+        config.brightness,
+        config.dim_brightness,
+        config.gcodes,
+    )
+
+
+def encode_message(text):
+    """Something to put in front of the operator, framing included."""
+    if isinstance(text, str):
+        text = text.encode("utf-8")
+    return encode_frame(_FRAME_MESSAGE, text[:_MESSAGE_MAX_LEN])
 
 
 def _normalize_tool(value):
@@ -182,9 +267,45 @@ class PrinterState:
     tool_number: int = -1
     filament_color: int = 0
 
+    #: Extrusion rate in micrometres of filament per second, signed.
+    flow: int = 0
+
+    #: Seconds left and seconds so far, or _UNKNOWN.
+    eta: int = _UNKNOWN
+    elapsed: int = _UNKNOWN
+
+    layer: int = _UNKNOWN
+    layer_total: int = _UNKNOWN
+
+    #: CRC32 of the config payload this host is holding. The device compares it
+    #: against the config it has and asks again if they differ.
+    config_crc: int = 0
+
     tram_type: PrinterTramType = PrinterTramType.NONE
 
     filament_type: bytes = b""
+
+
+@dataclasses.dataclass(frozen=True)
+class DeviceConfig:
+    """Settings pushed once, rather than restated ten times a second.
+
+    Only fields whose bit is set in `present` are applied - the rest keep the
+    firmware's compiled-in defaults, so an option absent from printer.cfg leaves
+    user_conf.h in charge of it.
+    """
+
+    present: int = 0
+
+    color_machine: int = 0
+    color_filament_unknown: int = 0
+
+    dim_ms: int = 0
+    sleep_ms: int = 0
+
+    brightness: int = 0
+    dim_brightness: int = 0
+
     gcodes: bytes = b""
 
 
@@ -208,6 +329,14 @@ class SharedState:
     #: can decide whether it is the active one. Derived from the toolhead rather
     #: than from a toolchanger module, so this works on any printer.
     active_extruder: str = ""
+    #: Extrusion rate of whichever extruder is mounted, micrometres per second.
+    #: Only the active tool's screen gets it - a docked tool is not extruding,
+    #: whatever the toolhead is doing.
+    flow: int = 0
+    eta: int = _UNKNOWN
+    elapsed: int = _UNKNOWN
+    layer: int = _UNKNOWN
+    layer_total: int = _UNKNOWN
 
 
 @dataclasses.dataclass
@@ -236,6 +365,7 @@ class KnomiCluster:
         self.toolhead = None
         self.virtual_sdcard = None
         self.print_stats = None
+        self.motion_report = None
 
         self.last_busy = 0
         self.was_printing = False
@@ -265,6 +395,11 @@ class KnomiCluster:
         self.toolhead = self.printer.lookup_object("toolhead")
         self.virtual_sdcard = self.printer.lookup_object("virtual_sdcard")
         self.print_stats = self.printer.lookup_object("print_stats")
+
+        # Core Klipper, loaded on every printer - but looked up softly, because
+        # a fork that drops it should cost the screens their wave animation and
+        # nothing else.
+        self.motion_report = self.printer.lookup_object("motion_report", None)
 
         if self.printer.lookup_object("z_tilt", None):
             self.tram_type = PrinterTramType.ZTA
@@ -329,6 +464,9 @@ class KnomiCluster:
         else:
             provider = self.virtual_sdcard.get_virtual_sdcard_gcode_provider()
 
+        progress = provider.progress() * 100
+        elapsed, eta, layer, layer_total = self._job_timing(eventtime, progress)
+
         return SharedState(
             status=status,
             working=working,
@@ -340,9 +478,69 @@ class KnomiCluster:
             bed_target=bed_target,
             chamber_temp=chamber_temp,
             chamber_target=chamber_target,
-            progress=provider.progress() * 100,
+            progress=progress,
             tram_type=self.tram_type,
             active_extruder=self.toolhead.get_extruder().get_name(),
+            flow=self._flow(eventtime),
+            eta=eta,
+            elapsed=elapsed,
+            layer=layer,
+            layer_total=layer_total,
+        )
+
+    def _flow(self, eventtime):
+        """Extrusion rate in micrometres per second, signed.
+
+        Taken from motion_report rather than differencing the extruder position
+        between ticks. The position is the commanded one, which runs a full
+        lookahead queue ahead of what the nozzle is doing and jumps in bursts as
+        the queue fills - a wave driven by it would surge and stall while the
+        print ran smoothly. It is also reset by any G92 E0, which some slicers
+        emit every layer, so every reset would read as an enormous retraction.
+        motion_report samples the trapezoid queue at the current print time,
+        which is the same thing the stepper is being told.
+        """
+        if self.motion_report is None:
+            return 0
+        try:
+            status = self.motion_report.get_status(eventtime)
+            return int(status["live_extruder_velocity"] * 1000)
+        except (KeyError, TypeError, ValueError):
+            return 0
+
+    def _job_timing(self, eventtime, progress):
+        """Seconds elapsed, seconds left, and where we are in the layer stack.
+
+        The estimate is file progress extrapolated linearly, which is the same
+        arithmetic every other display does and is wrong in the same familiar
+        ways - long first layers pull it high, and it settles as the job runs.
+        Klipper does not compute one, and inventing a better model here would
+        mean disagreeing with the number the user already sees in Mainsail.
+        """
+        try:
+            stats = self.print_stats.get_status(eventtime)
+        except Exception:
+            return _UNKNOWN, _UNKNOWN, _UNKNOWN, _UNKNOWN
+
+        if stats.get("state") not in _ACTIVE_PRINT_STATES:
+            return _UNKNOWN, _UNKNOWN, _UNKNOWN, _UNKNOWN
+
+        elapsed = int(stats.get("print_duration") or 0)
+
+        eta = _UNKNOWN
+        # Below a percent the extrapolation divides by almost nothing and
+        # produces days. Better to say nothing until the job has some history.
+        if progress >= 1.0 and elapsed > 0:
+            eta = int(elapsed * (100.0 - progress) / progress)
+
+        info = stats.get("info") or {}
+        layer = info.get("current_layer")
+        layer_total = info.get("total_layer")
+        return (
+            elapsed,
+            eta,
+            _UNKNOWN if layer is None else int(layer),
+            _UNKNOWN if layer_total is None else int(layer_total),
         )
 
     def _bed(self, eventtime):
@@ -442,6 +640,9 @@ class Knomi_Serial:
         self.device_report = {}
         self.device_report_time = None
         self.warned_proto = _UNSET
+        #: Last message pushed, so a shutdown does not resend the same string
+        #: ten times a second for as long as the printer stays down.
+        self.last_message = None
 
         self.config_serial = config.get("serial")
         self.config_tool = _normalize_tool(config.get("tool", None))
@@ -470,15 +671,11 @@ class Knomi_Serial:
             config.getfloat("speed_z", 100.0),
         ]
 
-        self.config_gcodes = config.get("gcodes", "")
-        gcodes = [gcode.strip() for gcode in self.config_gcodes.split(",")]
-        gcodes = [gcode for gcode in gcodes if gcode]
-        gcodes = "\n".join(gcodes)
-        self.gcodes = gcodes.encode("utf-8")
-        if len(self.gcodes) > _GCODES_MAX_LEN:
-            raise config.error(
-                f"Too many G-codes specified ({len(self.gcodes)} > {_GCODES_MAX_LEN})",
-            )
+        self.device_config = self._build_config(config)
+        # Once, here. The device is told this on every state frame, and stamping
+        # a precomputed integer is the entire per-tick cost of keeping config in
+        # sync - there is nothing to diff and nothing to decide.
+        self.config_crc = zlib.crc32(config_payload(self.device_config))
 
         # One cluster serves every section. The first one to load builds it;
         # load_object is not used because that would need a second file in
@@ -499,6 +696,109 @@ class Knomi_Serial:
             "klippy:disconnect",
             self._handle_disconnect,
         )
+
+    # ------------------------------------------------------------------
+    # config
+    # ------------------------------------------------------------------
+
+    def _build_config(self, config):
+        """Everything true for hours at a time, gathered into one frame.
+
+        Each field carries a presence bit, and a field the user did not write is
+        left out rather than sent as this module's idea of a default. Otherwise
+        the host would silently become the authority on every setting, and
+        editing user_conf.h and reflashing would appear to work right up until
+        the first config frame arrived and undid it.
+        """
+        present = 0
+        values = {}
+
+        def _take(bit, key, parse):
+            nonlocal present
+            raw = config.get(key, None)
+            if raw is None:
+                return None
+            present |= bit
+            return parse(raw)
+
+        def _color(key):
+            def parse(raw):
+                text = str(raw).strip().lstrip("#")
+                try:
+                    return int(text, 16) & 0xFFFFFF
+                except ValueError:
+                    raise config.error(
+                        f"{self.name}: {key}='{raw}' is not a hex colour",
+                    )
+
+            return parse
+
+        def _ms(key):
+            def parse(raw):
+                try:
+                    seconds = float(raw)
+                except ValueError:
+                    raise config.error(f"{self.name}: {key}='{raw}' is not a number")
+                if seconds < 0:
+                    raise config.error(f"{self.name}: {key} cannot be negative")
+                return int(seconds * 1000)
+
+            return parse
+
+        def _level(key):
+            def parse(raw):
+                try:
+                    level = int(raw)
+                except ValueError:
+                    raise config.error(f"{self.name}: {key}='{raw}' is not a number")
+                if not 0 <= level <= 16:
+                    raise config.error(f"{self.name}: {key} must be 0-16")
+                return level
+
+            return parse
+
+        values["color_machine"] = _take(
+            _HAS_COLOR_MACHINE, "color_machine", _color("color_machine")
+        )
+        values["color_filament_unknown"] = _take(
+            _HAS_COLOR_UNKNOWN,
+            "color_filament_unknown",
+            _color("color_filament_unknown"),
+        )
+        values["dim_ms"] = _take(_HAS_DIM_MS, "dim_time", _ms("dim_time"))
+        values["sleep_ms"] = _take(_HAS_SLEEP_MS, "sleep_time", _ms("sleep_time"))
+        values["brightness"] = _take(
+            _HAS_BRIGHTNESS, "brightness", _level("brightness")
+        )
+        values["dim_brightness"] = _take(
+            _HAS_DIM_BRIGHTNESS, "dim_brightness", _level("dim_brightness")
+        )
+
+        gcodes = b""
+        raw_gcodes = config.get("gcodes", None)
+        if raw_gcodes is not None:
+            present |= _HAS_GCODES
+            names = [name.strip() for name in raw_gcodes.split(",")]
+            gcodes = "\n".join(name for name in names if name).encode("utf-8")
+            if len(gcodes) > _GCODES_MAX_LEN:
+                raise config.error(
+                    f"Too many G-codes specified ({len(gcodes)} > {_GCODES_MAX_LEN})",
+                )
+
+        if values["dim_ms"] is not None and values["sleep_ms"] is not None:
+            if values["dim_ms"] > values["sleep_ms"]:
+                raise config.error(
+                    f"{self.name}: dim_time must not be later than sleep_time",
+                )
+
+        return DeviceConfig(
+            present=present,
+            gcodes=gcodes,
+            **{key: (0 if value is None else value) for key, value in values.items()},
+        )
+
+    def _send_config(self):
+        self._write(encode_config(self.device_config))
 
     # ------------------------------------------------------------------
     # connection
@@ -585,6 +885,10 @@ class Knomi_Serial:
 
         tool = self.cluster.tool_state(self.config_tool)
 
+        # A screen with no hotend configured can never be the active tool, which
+        # is correct: it is not a tool.
+        active = bool(self.config_hotend) and self.config_hotend == shared.active_extruder
+
         self._send_state(
             PrinterState(
                 status=shared.status,
@@ -594,10 +898,7 @@ class Knomi_Serial:
                 homed_y=shared.homed_y,
                 homed_z=shared.homed_z,
                 used=tool.used,
-                # A screen with no hotend configured can never be the active
-                # tool, which is correct: it is not a tool.
-                active=bool(self.config_hotend)
-                and self.config_hotend == shared.active_extruder,
+                active=active,
                 hotend_temp=hotend_temp,
                 hotend_target=hotend_target,
                 bed_temp=shared.bed_temp,
@@ -609,9 +910,16 @@ class Knomi_Serial:
                 progress=shared.progress,
                 tool_number=int(self.config_tool) if self._tool_is_numeric() else -1,
                 filament_color=tool.color,
+                # Only the mounted tool is extruding. A docked one shares the
+                # toolhead's motion report and none of its filament.
+                flow=shared.flow if active else 0,
+                eta=shared.eta,
+                elapsed=shared.elapsed,
+                layer=shared.layer,
+                layer_total=shared.layer_total,
+                config_crc=self.config_crc,
                 tram_type=shared.tram_type,
                 filament_type=tool.type.encode("utf-8")[:_FILAMENT_TYPE_MAX_LEN],
-                gcodes=self.gcodes,
             )
         )
 
@@ -644,23 +952,28 @@ class Knomi_Serial:
 
     def _send_shutdown_state(self):
         message, _ = self.printer.get_state_message()
-        message = message[:_GCODES_MAX_LEN]
-        message = message.split("\n")[0]
-        message = message.upper()
-        message = message.encode("utf-8")
+        message = message.split("\n")[0].upper()[:_MESSAGE_MAX_LEN]
+
+        # Two frames, because the reason and the state are two different facts.
+        # Under proto 2 the reason went in the macro list - the only string field
+        # in the packet - which worked, and meant the shutdown screen and the
+        # G-code page read the same bytes for opposite purposes.
+        if message != self.last_message:
+            self.last_message = message
+            self._write(encode_message(message))
         self._send_state(
-            PrinterState(
-                status=PrinterStatus.SHUTDOWN,
-                gcodes=message,
-            )
+            PrinterState(status=PrinterStatus.SHUTDOWN, config_crc=self.config_crc)
         )
 
     def _send_state(self, state):
+        self._write(encode_state(state))
+
+    def _write(self, data):
         if not self.serial or not self.serial.is_open:
             return
 
         try:
-            self.serial.write(encode_state(state))
+            self.serial.write(data)
         except serial.SerialException as e:
             # Covers SerialTimeoutException, which is what _WRITE_TIMEOUT
             # produces when a screen stops draining its buffer.
@@ -702,6 +1015,14 @@ class Knomi_Serial:
             except (KeyError, ValueError):
                 return None
 
+        def _hex(key):
+            try:
+                return int(report[key], 16)
+            except (KeyError, ValueError, TypeError):
+                return None
+
+        device_crc = _hex("cfg")
+
         proto = _int("proto")
         tool = self.cluster.tool_state(self.config_tool)
         return {
@@ -710,6 +1031,7 @@ class Knomi_Serial:
             "port": self.config_serial,
             "module_version": self.module_version,
             "protocol_version": _PROTO_VERSION,
+            "config_crc": f"{self.config_crc:08X}",
             # What the host believes about this tool.
             "tool": self.config_tool,
             "used": tool.used,
@@ -722,6 +1044,12 @@ class Knomi_Serial:
             "device_protocol_version": proto,
             "protocol_match": proto == _PROTO_VERSION if proto else None,
             "build_variant": report.get("var"),
+            # What config the device is actually running, so "I pushed it" and
+            # "it took" are separable.
+            "device_config_crc": None if device_crc is None else f"{device_crc:08X}",
+            "config_applied": (
+                None if device_crc is None else device_crc == self.config_crc
+            ),
             "sleep_state": report.get("sleep"),
             "screen": report.get("scr"),
             "page": _int("page"),
@@ -734,6 +1062,13 @@ class Knomi_Serial:
         try:
             if cmd.startswith(_CMD_REPORT):
                 self._process_report(cmd[len(_CMD_REPORT) :])
+                return
+            if cmd == _CMD_CONFIG_REQUEST:
+                # The device noticed the CRC we stamp on every state frame does
+                # not match what it holds. It asks; we answer. That is the whole
+                # protocol - no acks, no retry timer, and nothing here that has
+                # to remember which devices are up to date.
+                self._send_config()
                 return
             if cmd == _CMD_STOP:
                 self.printer.invoke_shutdown(f"Stop requested by {self.name}")

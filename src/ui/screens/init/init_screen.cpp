@@ -38,9 +38,12 @@ namespace ui
 
     void _printer_update_handler(const printer::State &state)
     {
-      if (state.gcodes[0] != '\0')
+      // Anything the host has to say while we are still waiting for it - a
+      // shutdown reason, or a local fault like a malformed frame. Otherwise the
+      // line keeps the printer name it was built with.
+      if (state.message[0] != '\0')
       {
-        lv_label_set_text(name, state.gcodes);
+        lv_label_set_text(name, state.message);
       }
     }
 

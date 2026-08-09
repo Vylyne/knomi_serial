@@ -21,6 +21,7 @@ const char *kRestart = "RESTART";
 const char *kGcode = "GCODE:";
 const char *kMove = "MOVE:";
 const char *kReport = "RPT:";
+const char *kConfigRequest = "CFG?";
 
 }
 
@@ -71,7 +72,19 @@ void send_report(const char *fields) {
   send_cmd(cmd.c_str());
 }
 
+void send_config_request() {
+  send_cmd(Commands::kConfigRequest);
+}
+
 void send_cmd(const char *cmd) {
+  // The mutex is created by send_task, which starts alongside the task that
+  // receives packets - so a config request fired by the very first frame can
+  // arrive before there is anything to take. Dropping that one request is
+  // correct: the device asks again a second later, and taking a null semaphore
+  // is undefined behaviour.
+  if (!_semaphore) {
+    return;
+  }
   xSemaphoreTake(_semaphore, portMAX_DELAY);
   _queue.push_back(cmd);
   xSemaphoreGive(_semaphore);

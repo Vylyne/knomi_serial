@@ -40,8 +40,12 @@ lv_obj_t *init(const printer::State &state) {
 }
 
 void _printer_update_handler(const printer::State &state) {
-  if (state.gcodes[0] != '\0') {
-    lv_label_set_text(_message, state.gcodes);
+  // Its own frame now, rather than borrowed room in the macro list. The reason
+  // Klipper stopped is the one thing this screen exists to say, and it was
+  // being carried by a field named for something else - which is why removing
+  // that field from the tick had to move it somewhere rather than drop it.
+  if (state.message[0] != '\0') {
+    lv_label_set_text(_message, state.message);
   }
 }
 

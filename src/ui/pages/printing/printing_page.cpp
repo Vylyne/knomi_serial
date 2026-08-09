@@ -14,7 +14,18 @@ namespace ui {
 namespace printing_page {
 
 static lv_obj_t *_fill = nullptr;
+static lv_obj_t *_wave = nullptr;
+static lv_timer_t *_wave_timer = nullptr;
 static lv_obj_t *_pct = nullptr;
+
+//: The strip of glass the surface moves through, painted directly.
+//:
+//: 4800 bytes of DRAM, and the reason the tide is affordable at all - see the
+//: note on _paint_wave.
+static const int32_t kWaveBand = 2 * WAVE_AMP;
+static uint16_t _wave_buf[RES_H * kWaveBand];
+static uint16_t _wave_fg = 0;
+static uint16_t _wave_bg = 0;
 static lv_obj_t *_sub = nullptr;
 static lv_obj_t *_tool = nullptr;
 static lv_obj_t *_dot_l = nullptr;
@@ -31,6 +42,25 @@ static lv_timer_t *_cancel_timer = nullptr;
 static bool _cancel_armed = false;
 static bool _paused = false;
 
+//: Extrusion rate off the wire, and the surface it drives.
+//:
+//: Amplitude is carried in sixteenths so it can ease rather than step - five
+//: whole pixels of range would arrive in five visible jumps otherwise. Phase is
+//: in 1/256ths of a table entry for the same reason.
+static int32_t _flow = 0;
+static int32_t _amp_fx = 0;
+static int32_t _phase_fx = 0;
+static int32_t _fill_top = -1;
+
+//: Last values written, so an update that changes nothing touches nothing.
+//: Impossible sentinels, so the first update after a rebuild always writes.
+static uint32_t _colored = 0xFFFFFFFFu;
+static int32_t _pct_shown = INT32_MIN;
+static int32_t _sub_hot = INT32_MIN;
+static int32_t _sub_target = INT32_MIN;
+static int32_t _tool_shown = INT32_MIN;
+static int8_t _dots_shown = -1;
+
 //: Remembers the material the sub-line scrim was last sized for, so it is
 //: measured again when the spool changes rather than on every packet.
 //:
@@ -40,8 +70,40 @@ static bool _paused = false;
 //: a size at all.
 static char _sized_for[printer::kFilamentTypeMaxLen + 1] = {0};
 
+namespace {
+
+//: One cycle in 32 steps, scaled to +/-100. Integer, like the heat ramp: this
+//: runs eight times per tick and there is no reason for it to touch the FPU.
+const int8_t kSine[32] = {
+    0,   20,  38,  56,  71,  83,  92,  98,
+    100, 98,  92,  83,  71,  56,  38,  20,
+    0,   -20, -38, -56, -71, -83, -92, -98,
+    -100, -98, -92, -83, -71, -56, -38, -20,
+};
+
+//: Phase advance per pixel across the glass, in 1/256ths of a table entry.
+//: 51 puts about one and a half wavelengths on the screen - enough that the
+//: surface is visibly travelling rather than heaving as one block.
+const int32_t kWavePerPixel = 51;
+
+//: Table entries per tick at full flow, in 1/256ths. About one cycle a second.
+const int32_t kWaveSpeed = 307;
+
+int32_t _sine(int32_t phase_fx) {
+  // Wrapped rather than clamped, and masked rather than modulo'd, because the
+  // phase runs backwards during a retraction and would otherwise index behind
+  // the table.
+  return kSine[(uint32_t)(phase_fx >> 8) & 31u];
+}
+
+}
+
 static void _pause_handler(lv_event_t *e);
 static void _cancel_handler(lv_event_t *e);
+static void _wave_tick(lv_timer_t *timer);
+static void _page_deleted(lv_event_t *e);
+static void _place_wave();
+static void _paint_wave();
 static void _disarm_cancel(lv_timer_t *timer);
 static void _show_cancel_state();
 static lv_obj_t *_init_dot(lv_obj_t *parent);
@@ -66,6 +128,47 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   lv_obj_set_height(_fill, 0);
   lv_obj_align(_fill, LV_ALIGN_BOTTOM_MID, 0, 0);
   lv_obj_set_style_bg_opa(_fill, LV_OPA_COVER, LV_PART_MAIN);
+
+  // The surface: a strip of glass the width of the screen, painted a pixel at
+  // a time. The fill stops WAVE_AMP short of true progress and this band spans
+  // the WAVE_AMP either side of it, so a dead-flat surface lands exactly on the
+  // waterline and progress stays honest whatever the swell is doing.
+  //
+  // A canvas rather than widgets. The first version of this was eight columns
+  // whose heights were set each frame, which drew almost nothing - 14 kpx/s -
+  // and still cost 44% of the UI task. Setting a widget's height is a style
+  // write, a style write that affects geometry marks the layout dirty, and a
+  // dirty layout is recalculated from the screen down - so every frame of the
+  // wave was re-running the flex layout of the whole five-page row to move
+  // eight rectangles by a pixel. Painting into a buffer touches no styles and
+  // no layout, and invalidates one rectangle instead of sixteen.
+  _wave = lv_canvas_create(page);
+  lv_canvas_set_buffer(_wave, _wave_buf, RES_H, kWaveBand, LV_COLOR_FORMAT_RGB565);
+  lv_obj_remove_flag(_wave, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_remove_flag(_wave, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_align(_wave, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+  _flow = 0;
+  _amp_fx = 0;
+  _phase_fx = 0;
+  _fill_top = -1;
+
+  // Every cache forgotten, for the same reason _sized_for is below: none of
+  // these are part of the page, so they outlive it. Left standing they would
+  // describe widgets that no longer exist, and the fresh ones would sit empty
+  // until the printer happened to change.
+  _colored = 0xFFFFFFFFu;
+  _pct_shown = INT32_MIN;
+  _sub_hot = INT32_MIN;
+  _sub_target = INT32_MIN;
+  _tool_shown = INT32_MIN;
+  _dots_shown = -1;
+
+  // Deleted with the page. Not lv_timer_set_repeat_count - that makes LVGL
+  // delete the timer itself and leaves this pointer dangling, which is a
+  // double free waiting for the next status change.
+  lv_obj_add_event_cb(page, _page_deleted, LV_EVENT_DELETE, nullptr);
+  _wave_timer = lv_timer_create(_wave_tick, WAVE_TICK_MS, nullptr);
 
   // Every readout gets a scrim - a soft dark pill sized to the text, drawn over
   // the fill and under the label.
@@ -141,6 +244,96 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
 
 static void _pause_handler(lv_event_t *e) {
   printer::send::send_gcode(_paused ? "RESUME" : "PAUSE");
+}
+
+static void _page_deleted(lv_event_t *e) {
+  if (_wave_timer) {
+    lv_timer_delete(_wave_timer);
+    _wave_timer = nullptr;
+  }
+  _wave = nullptr;
+}
+
+//: Sit the band back on top of the fill after progress moves it. Only when
+//: progress actually moves - this one does mark the layout dirty, which is
+//: affordable once a percent and was not affordable thirty times a second.
+static void _place_wave() {
+  if (_wave) {
+    lv_obj_align(_wave, LV_ALIGN_BOTTOM_MID, 0, -_fill_top);
+  }
+}
+
+// Paint one frame of the surface into the canvas buffer.
+//
+// Rows outer and columns inner, so each row is a straight walk through memory.
+// 2400 pixels a frame, which is a twenty-fourth of the glass.
+static void _paint_wave() {
+  if (!_wave) {
+    return;
+  }
+
+  static uint8_t surface[RES_H];
+  for (int32_t x = 0; x < RES_H; x++) {
+    int32_t s = _sine(_phase_fx + x * kWavePerPixel);
+    int32_t top = WAVE_AMP - (_amp_fx * s) / (16 * 100);
+    if (top < 0) {
+      top = 0;
+    }
+    if (top > kWaveBand) {
+      top = kWaveBand;
+    }
+    surface[x] = (uint8_t)top;
+  }
+
+  for (int32_t y = 0; y < kWaveBand; y++) {
+    uint16_t *row = _wave_buf + y * RES_H;
+    for (int32_t x = 0; x < RES_H; x++) {
+      // Above the surface is the page's own ground, which is black - the same
+      // thing that would show if this band were not here at all.
+      row[x] = ((int32_t)surface[x] > y) ? _wave_bg : _wave_fg;
+    }
+  }
+
+  lv_obj_invalidate(_wave);
+}
+
+// The surface, once per LVGL refresh.
+//
+// Amplitude follows the extrusion rate and eases rather than snapping, so a
+// travel move does not slam the sea flat and back. Phase advances at a rate set
+// by the same number and signed by it: a retraction runs the swell backwards,
+// which is a small thing nobody will consciously notice and exactly what a real
+// surface does when you pull filament back up the tube.
+static void _wave_tick(lv_timer_t *timer) {
+  // -256..256, the flow as a fraction of what counts as full.
+  int32_t flow_fx = _flow * 256 / WAVE_FLOW_FULL;
+  if (flow_fx > 256) {
+    flow_fx = 256;
+  }
+  if (flow_fx < -256) {
+    flow_fx = -256;
+  }
+
+  int32_t magnitude = flow_fx < 0 ? -flow_fx : flow_fx;
+  int32_t target_fx = magnitude * WAVE_AMP * 16 / 256;
+  int32_t was_fx = _amp_fx;
+  // An eighth of the remaining distance each tick: about a fifth of a second to
+  // settle, fast enough to answer a change in flow and slow enough not to
+  // flicker on the gaps between moves.
+  _amp_fx += (target_fx - _amp_fx) / 8;
+  if (_amp_fx != target_fx && (target_fx - _amp_fx) / 8 == 0) {
+    _amp_fx += target_fx > _amp_fx ? 1 : -1;
+  }
+
+  // A flat surface that was already flat is the idle case, and it must cost
+  // nothing at all - this page sits at 28% while printing and there is no
+  // reason for a finished job to keep paying for waves it is not making.
+  if (_amp_fx == 0 && was_fx == 0) {
+    return;
+  }
+
+  _phase_fx += flow_fx * kWaveSpeed / 256;
+  _paint_wave();
 }
 
 // Two taps, because this ends a job. The first arms and says so by turning into
@@ -245,7 +438,20 @@ void printer_update(const printer::State &state) {
         _paused ? COLOR_RESUME_BG : COLOR_PAUSE_BG);
   }
 
-  lv_obj_set_style_bg_color(_fill, theme::filament(state), LV_PART_MAIN);
+  _flow = state.flow;
+
+  // Guarded, because setting a local style property invalidates the object
+  // whether or not the value changed - and this one is the full width of the
+  // glass. It was being written ten times a second to say the filament was
+  // still the colour it had been all print.
+  if (state.filament_color != _colored) {
+    _colored = state.filament_color;
+    lv_color_t colour = theme::filament(state);
+    lv_obj_set_style_bg_color(_fill, colour, LV_PART_MAIN);
+    _wave_fg = lv_color_to_u16(colour);
+    _wave_bg = lv_color_to_u16(lv_color_black());
+    _paint_wave();
+  }
 
   int32_t pct = state.progress;
   if (pct < 0) {
@@ -254,42 +460,78 @@ void printer_update(const printer::State &state) {
   if (pct > 100) {
     pct = 100;
   }
-  lv_obj_set_height(_fill, pct * RES_V / 100);
 
-  lv_label_set_text_fmt(_pct, "%d%%", (int)pct);
-
-  if (state.filament_type[0] != '\0') {
-    lv_label_set_text_fmt(_sub, "%s   %d", state.filament_type, (int)state.hotend_temp);
-  } else {
-    lv_label_set_text_fmt(_sub, "%d", (int)state.hotend_temp);
+  // The body of the fill stops WAVE_AMP short and the columns make up the
+  // difference, so the average surface is exactly where progress says it is.
+  // Clamped at both ends: nothing to stand on at zero, and nothing above the
+  // glass at a hundred.
+  int32_t top = pct * RES_V / 100 - WAVE_AMP;
+  if (top < 0) {
+    top = 0;
+  }
+  if (top > RES_V - 2 * WAVE_AMP) {
+    top = RES_V - 2 * WAVE_AMP;
+  }
+  if (top != _fill_top) {
+    _fill_top = top;
+    lv_obj_set_height(_fill, top);
+    _place_wave();
   }
 
-  // The readout takes the heat colour while something is being asked of the
-  // heater, and plain ink when nothing is. The scrim guarantees a dark ground
-  // underneath, so even the cool end of the ramp stays legible.
-  lv_obj_set_style_text_color(
-      _sub,
-      state.hotend_target > 0
-          ? theme::heat_ink(state.hotend_temp, state.hotend_target)
-          : lv_color_white(),
-      LV_PART_MAIN);
-
-  if (state.tool_number >= 0) {
-    lv_label_set_text_fmt(_tool, "T%d", (int)state.tool_number);
-    lv_obj_remove_flag(_tool, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    lv_obj_add_flag(_tool, LV_OBJ_FLAG_HIDDEN);
+  if (pct != _pct_shown) {
+    _pct_shown = pct;
+    lv_label_set_text_fmt(_pct, "%d%%", (int)pct);
   }
 
-  bool show_dots = state.active && state.tool_number >= 0;
-  lv_obj_align_to(_dot_l, _tool, LV_ALIGN_OUT_LEFT_MID, -7, 1);
-  lv_obj_align_to(_dot_r, _tool, LV_ALIGN_OUT_RIGHT_MID, 7, 1);
-  if (show_dots) {
-    lv_obj_remove_flag(_dot_l, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(_dot_r, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    lv_obj_add_flag(_dot_l, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(_dot_r, LV_OBJ_FLAG_HIDDEN);
+  if (state.hotend_temp != _sub_hot || state.hotend_target != _sub_target ||
+      strncmp(_sized_for, state.filament_type, sizeof(_sized_for) - 1) != 0) {
+    _sub_hot = state.hotend_temp;
+    _sub_target = state.hotend_target;
+
+    if (state.filament_type[0] != '\0') {
+      lv_label_set_text_fmt(_sub, "%s   %d", state.filament_type, (int)_sub_hot);
+    } else {
+      lv_label_set_text_fmt(_sub, "%d", (int)_sub_hot);
+    }
+
+    // The readout takes the heat colour while something is being asked of the
+    // heater, and plain ink when nothing is. The scrim guarantees a dark ground
+    // underneath, so even the cool end of the ramp stays legible.
+    lv_obj_set_style_text_color(
+        _sub,
+        _sub_target > 0 ? theme::heat_ink(_sub_hot, _sub_target)
+                        : lv_color_white(),
+        LV_PART_MAIN);
+  }
+
+  if (state.tool_number != _tool_shown) {
+    _tool_shown = state.tool_number;
+    if (_tool_shown >= 0) {
+      lv_label_set_text_fmt(_tool, "T%d", (int)_tool_shown);
+      lv_obj_remove_flag(_tool, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_remove_flag(_scrim_tool, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(_tool, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(_scrim_tool, LV_OBJ_FLAG_HIDDEN);
+    }
+    // Only here. The tag is the one label whose width can change without its
+    // text changing every packet, so this is the only place the dots can have
+    // moved - it used to run on every update, dirtying the layout to put them
+    // back exactly where they already were.
+    lv_obj_align_to(_dot_l, _tool, LV_ALIGN_OUT_LEFT_MID, -7, 1);
+    lv_obj_align_to(_dot_r, _tool, LV_ALIGN_OUT_RIGHT_MID, 7, 1);
+  }
+
+  int8_t show_dots = (state.active && state.tool_number >= 0) ? 1 : 0;
+  if (show_dots != _dots_shown) {
+    _dots_shown = show_dots;
+    if (show_dots) {
+      lv_obj_remove_flag(_dot_l, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_remove_flag(_dot_r, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(_dot_l, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(_dot_r, LV_OBJ_FLAG_HIDDEN);
+    }
   }
 
   // The sub-line is the one width that genuinely varies, because the material
@@ -307,12 +549,6 @@ void printer_update(const printer::State &state) {
       snprintf(widest, sizeof(widest), "888");
     }
     _size_scrim(_scrim_sub, &lv_font_montserrat_18, widest, 12, 3, LV_ALIGN_CENTER, 48);
-  }
-
-  if (lv_obj_has_flag(_tool, LV_OBJ_FLAG_HIDDEN)) {
-    lv_obj_add_flag(_scrim_tool, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    lv_obj_remove_flag(_scrim_tool, LV_OBJ_FLAG_HIDDEN);
   }
 }
 

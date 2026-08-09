@@ -101,6 +101,31 @@
 // sizes; this lifts it without touching the haze.
 #define HEAT_INK_LIFT 90
 
+// ---------------------------------------------------------------------------
+// The tide
+//
+// The surface of the fill moves with the extruder. Not decoration for its own
+// sake: it is the one thing on the screen that says the machine is working
+// right now, as opposed to having been left partway through a job. Progress
+// answers that too, but only once a minute.
+// ---------------------------------------------------------------------------
+
+// Peak height of the swell above the flat waterline, in pixels. The fill sits
+// this far below true progress and the painted band puts it back, so the
+// average surface is always exactly where progress says it is.
+//
+// Also half the height of the canvas, so raising it costs 480 bytes a pixel
+// and a proportional share of each frame.
+#define WAVE_AMP 5
+
+// Extrusion rate that counts as a full-amplitude swell, in micrometres of
+// filament per second. Around 3mm/s is ordinary perimeter flow.
+#define WAVE_FLOW_FULL 3500
+
+// How often the surface is recomputed. 33ms matches LVGL's own refresh period,
+// so a faster tick would compute frames nobody sees.
+#define WAVE_TICK_MS 33
+
 // Depth of the pool of loaded filament along the bottom of the tool page - the
 // printing page's fill, at rest. Deep enough to read as a body of colour, shallow
 // enough to stay clear of the corner marks at 150-188.

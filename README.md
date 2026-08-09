@@ -39,7 +39,29 @@ speed_y: 100  # Speed to move the toolhead in the Y direction.
 speed_z: 100  # Speed to move the toolhead in the Z direction.
 
 gcodes:  # Comma separated G-Codes to display on the Knomi_Serial device.
+
+# Appearance and sleep. Every one of these is optional, and anything left out
+# keeps the value the firmware was compiled with in src/user_conf.h - so setting
+# one here overrides that default rather than replacing the whole set. They are
+# pushed to the screen once and survive a reflash, which the firmware's own
+# defaults do not.
+color_machine:           # The printer's own accent, RRGGBB. Default FFA7C4.
+color_filament_unknown:  # Shown when the host has not said what is loaded.
+                         # Deliberately not black - unknown filament and black
+                         # filament are different facts. Default 5A5A5A.
+brightness:      # Backlight level, 0-16. Default 8.
+dim_brightness:  # Level once dimmed. Default 3.
+dim_time:        # Seconds idle before dimming. Default 30.
+sleep_time:      # Seconds idle before the backlight goes out. Default 60.
+                 # A screen never sleeps while its tool is in the job, while the
+                 # nozzle is hot, or while Klipper is down - see KNOMI_TOOL.
 ```
+
+These reach the device over the config channel, which it asks for whenever what
+it holds stops matching what the host has. Editing them and restarting Klipper is
+enough; there is nothing to reflash and nothing to power-cycle.
+`printer["knomi_serial T0_knomi"].config_applied` says whether the screen is
+actually running what was sent. See [docs/protocol.md](docs/protocol.md).
 
 ### Telling the screens about the job
 

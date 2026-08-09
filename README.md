@@ -162,8 +162,8 @@ KNOMI_TOOL [SCREEN=T0_knomi | TOOL=0] [USED=1] [COLOR=FF8800] [TYPE=PLA]
 
 | Parameter | Value | If omitted |
 | --- | --- | --- |
-| `SCREEN` | Which screen, by section name — `[knomi_serial T0_knomi]` is `T0_knomi`, the way `[fan_generic my_fan]` is `my_fan`. | See below |
-| `TOOL` | Which screen, by its `tool:` value. `T0`, `t0` and `0` are equivalent. May match several screens. | See below |
+| `SCREEN` | Which screen, by section name — `[knomi_serial T0_knomi]` is `T0_knomi`, the way `[fan_generic my_fan]` is `my_fan`. <td rowspan="2">Optional for single screen setups. mutliscreen stup must define either TOOL or SCREEN </td>
+| `TOOL` | Which screen, by its `tool:` value. `T0`, `t0` and `0` are equivalent. May match several screens. |
 | `USED` | `0` or `1` — whether the running job uses this tool. Decides whether the screen sleeps. | Unchanged |
 | `COLOR` | Filament colour as `RRGGBB`, leading `#` allowed. Empty clears it back to unknown. | Unchanged |
 | `TYPE` | Material name, up to 15 characters. | Unchanged |

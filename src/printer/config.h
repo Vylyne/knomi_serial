@@ -8,6 +8,16 @@
 namespace printer {
 namespace config {
 
+//: Load the last config the host sent, from flash. Call once, before any task
+//: starts - after that both tasks read this and neither may be racing the load.
+//:
+//: Without it a screen spends its first second wrong: default colours, default
+//: sleep timings, an empty macro list, and a spinner in a pink the user may
+//: have replaced months ago. The host does eventually say, but only after the
+//: device has noticed the CRC mismatch and asked - a round trip that cannot
+//: begin until Klipper is up, which on a cold boot is long after the display.
+void begin();
+
 //: The settings in force. Never null, and valid from before the first packet:
 //: it starts at the compile-time defaults in user_conf.h, so a printer.cfg that
 //: overrides nothing behaves exactly as the firmware was built to.
@@ -19,6 +29,11 @@ const Config &get();
 
 //: Adopt a config payload as it arrived: kConfigWireSize bytes, network order.
 //: Returns false if the payload is the wrong size.
+//:
+//: Writes it to flash if it differs from what is stored there - and only then.
+//: NVS is wear-levelled and a config changes a few times in a device's life,
+//: but a write on every adoption would still be a write every time Klipper
+//: restarted, for nothing.
 bool apply(const void *payload, uint32_t len);
 
 //: CRC32 of the payload currently held, or zero before the host has sent one.

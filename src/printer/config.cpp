@@ -1,6 +1,7 @@
 #include "config.h"
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include <string.h>
 
 #include "user_conf.h"
@@ -9,6 +10,16 @@ namespace printer {
 namespace config {
 
 namespace {
+
+//: NVS namespace and keys. The stored payload is the wire bytes exactly as they
+//: arrived, so loading is the same code path as receiving and the CRC comes out
+//: identical - there is no second decoder to disagree with the first.
+const char *kStore = "knomi";
+const char *kKeyPayload = "cfg";
+const char *kKeyProto = "proto";
+
+Preferences _nvs;
+bool _nvs_open = false;
 
 //: How long to wait before asking again. Long enough that a host which cannot
 //: answer is not being interrogated ten times a second, short enough that a
@@ -57,6 +68,32 @@ void _ensure() {
   _initialised = true;
 }
 
+}
+
+void begin() {
+  _ensure();
+  if (!_nvs.begin(kStore, false)) {
+    return;
+  }
+
+  // A stored payload from a firmware that spoke a different protocol describes
+  // a different struct. The size check below catches most of that, but a change
+  // that kept the size and moved a field would not, and there is no way to tell
+  // those apart after the fact.
+  if (_nvs.getUInt(kKeyProto, 0) == kProtoVersion) {
+    static uint8_t stored[kConfigWireSize];
+    if (_nvs.getBytes(kKeyPayload, stored, sizeof(stored)) == kConfigWireSize) {
+      // Straight through the normal path, so anything wrong with it fails the
+      // same way a bad frame would. Writes are still disabled at this point,
+      // which is the whole reason they are enabled below rather than above:
+      // adopting the stored config is a change by every measure apply() has,
+      // and it would otherwise write those bytes back over themselves on every
+      // single boot.
+      apply(stored, kConfigWireSize);
+    }
+  }
+
+  _nvs_open = true;
 }
 
 const Config &get() {
@@ -116,10 +153,19 @@ bool apply(const void *payload, uint32_t len) {
   // Over the bytes as received, before any of the swapping above. That is what
   // the host hashed, and hashing our own decoded copy would agree with the host
   // only by accident of endianness.
-  _held_crc = crc32(payload, len);
+  uint32_t crc = crc32(payload, len);
+  bool changed = crc != _held_crc;
+  _held_crc = crc;
 
   _live = next;
   _ever_asked = false;
+
+  // Only on a change, and never during begin() - which reached here holding the
+  // very bytes it just read back out of flash.
+  if (changed && _nvs_open) {
+    _nvs.putBytes(kKeyPayload, payload, len);
+    _nvs.putUInt(kKeyProto, kProtoVersion);
+  }
   return true;
 }
 

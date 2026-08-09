@@ -8,11 +8,15 @@ is already open. About fourteen seconds for 240x240.
     python scripts/screenshot.py COM5 -o docs/img/printing.png
 
 Nothing else may be driving the port at the time - stop Klipper, or use
---drive to have this script feed the display a state of its own first, which is
-how the documentation shots are taken:
+--drive to have this script feed the display a state of its own first:
 
     python scripts/screenshot.py COM5 --drive printing -o docs/img/printing.png
-    python scripts/screenshot.py COM5 --drive idle --page 1 -o docs/img/tool.png
+
+--all regenerates every image the README uses, including the lost-link one that
+needs the script to stop talking and wait out the device's watchdog. Run it
+after any visual change:
+
+    python scripts/screenshot.py COM5 --all
 
 The PNG is written with the corners outside the round bezel made transparent,
 because the panel holds pixels there that nobody can see.
@@ -182,11 +186,85 @@ def capture(port, drive_frame, config, config_crc, verbose):
     raise SystemExit("  timed out waiting for the frame")
 
 
+def shoot(port, out, preset, config, config_crc, args, quiet_first=False):
+    """One capture, start to PNG."""
+    verbose = not args.quiet
+    frame = None
+
+    if preset:
+        try:
+            color = int(args.color.strip().lstrip("#"), 16)
+        except ValueError:
+            sys.exit(f"  --color '{args.color}' is not hex")
+        frame = state_for(preset, config_crc, color, args.type.encode("utf-8")[:15])
+        if verbose:
+            print(f"  {os.path.basename(out):<16} driving '{preset}'")
+
+        # The device may have just been reset by opening the port, so give it
+        # long enough to boot, ask for config and load its screen.
+        deadline = time.time() + max(args.settle, 3.0)
+        buf = b""
+        if preset in MESSAGES:
+            port.write(k.encode_message(MESSAGES[preset]))
+        while time.time() < deadline:
+            port.write(frame)
+            if port.in_waiting:
+                buf += port.read(port.in_waiting)
+                while b"\n" in buf:
+                    line, _, buf = buf.partition(b"\n")
+                    if line.strip() == b"KNOMI_CMD:CFG?":
+                        port.write(k.encode_config(config))
+            time.sleep(0.1)
+
+    if quiet_first:
+        # Stop feeding it and wait out the device's staleness watchdog, so the
+        # shot shows the lost-link mark. Capturing must then not drive either,
+        # or the first frame would clear what we came to photograph.
+        if verbose:
+            print(f"  {'':<16} going quiet for {args.quiet_for:.0f}s")
+        time.sleep(args.quiet_for)
+        frame = None
+
+    size, raw = capture(port, frame, config, config_crc, verbose)
+    width, height = size
+    want = width * height * 2
+    if len(raw) != want:
+        sys.exit(f"  short frame: {len(raw)} of {want} bytes")
+
+    pixels = rgb565_to_rgb888(raw, width * height)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    write_png(out, width, height, pixels, mask_round=not args.square)
+    if verbose:
+        print(f"  {'':<16} wrote {out}")
+
+
+#: The documentation set: (file stem, preset, go quiet first).
+#:
+#: Here rather than in a shell loop because regenerating these is a thing that
+#: happens after every visual change, and reassembling the commands by hand each
+#: time is how the stale shot ended up being taken three different ways.
+DOC_SHOTS = [
+    ("waiting", "waiting", False),
+    ("heating", "heating", False),
+    ("idle", "idle", False),
+    ("printing", "printing", False),
+    ("shutdown", "shutdown", False),
+    ("stale", "idle", True),
+]
+
+
 def main():
     p = argparse.ArgumentParser(
         description="Capture a Knomi_Serial display over the serial link.")
     p.add_argument("port", help="serial port, e.g. COM5 or /dev/ttyUSB0")
     p.add_argument("-o", "--out", default="screenshot.png")
+    p.add_argument("--all", action="store_true",
+                   help="regenerate the whole documentation set into --dir")
+    p.add_argument("--dir", default=os.path.join("docs", "img"),
+                   help="where --all writes (default docs/img)")
+    p.add_argument("--quiet-for", type=float, default=5.0,
+                   help="seconds of silence for the stale shot, which must "
+                        "exceed the firmware's STALE_TIMEOUT_MS")
     p.add_argument("--drive", choices=sorted(PRESETS),
                    help="feed the display this state first, instead of "
                         "photographing whatever a running Klipper is showing")
@@ -201,8 +279,13 @@ def main():
     p.add_argument("-q", "--quiet", action="store_true")
     args = p.parse_args()
 
+    # The accent is set explicitly rather than left to the firmware default,
+    # because the device now remembers the last config it was given - so a shot
+    # taken after somebody's experiment would quietly inherit their colour.
     config = k.DeviceConfig(
-        present=k._HAS_GCODES, gcodes=b"HOME\nQGL\nPURGE\nCLEAN_NOZZLE")
+        present=k._HAS_COLOR_MACHINE | k._HAS_GCODES,
+        color_machine=0xFFA7C4,
+        gcodes=b"HOME\nQGL\nPURGE\nCLEAN_NOZZLE")
     config_crc = zlib.crc32(k.config_payload(config))
 
     try:
@@ -210,48 +293,14 @@ def main():
     except serial.SerialException as e:
         sys.exit(f"Could not open {args.port}: {e}")
 
-    verbose = not args.quiet
     try:
-        frame = None
-        if args.drive:
-            try:
-                color = int(args.color.strip().lstrip("#"), 16)
-            except ValueError:
-                sys.exit(f"  --color '{args.color}' is not hex")
-            frame = state_for(
-                args.drive, config_crc, color, args.type.encode("utf-8")[:15])
-            if verbose:
-                print(f"  driving '{args.drive}', settling {args.settle}s")
-            # The device may have just been reset by opening the port, so give
-            # it long enough to boot, ask for config and load its screen.
-            deadline = time.time() + max(args.settle, 3.0)
-            buf = b""
-            if args.drive in MESSAGES:
-                port.write(k.encode_message(MESSAGES[args.drive]))
-            while time.time() < deadline:
-                port.write(frame)
-                if port.in_waiting:
-                    buf += port.read(port.in_waiting)
-                    while b"\n" in buf:
-                        line, _, buf = buf.partition(b"\n")
-                        if line.strip() == b"KNOMI_CMD:CFG?":
-                            port.write(k.encode_config(config))
-                time.sleep(0.1)
-
-        size, raw = capture(port, frame, config, config_crc, verbose)
-        if verbose:
-            print()
-
-        width, height = size
-        want = width * height * 2
-        if len(raw) != want:
-            sys.exit(f"  short frame: {len(raw)} of {want} bytes")
-
-        pixels = rgb565_to_rgb888(raw, width * height)
-        out = os.path.abspath(args.out)
-        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-        write_png(out, width, height, pixels, mask_round=not args.square)
-        print(f"  wrote {out}")
+        if args.all:
+            for stem, preset, quiet_first in DOC_SHOTS:
+                out = os.path.abspath(os.path.join(args.dir, stem + ".png"))
+                shoot(port, out, preset, config, config_crc, args, quiet_first)
+        else:
+            shoot(port, os.path.abspath(args.out), args.drive,
+                  config, config_crc, args)
     finally:
         try:
             port.write(k.encode_state(

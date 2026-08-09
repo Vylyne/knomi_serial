@@ -131,14 +131,20 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   // ground is a single known colour and ink_on can simply answer for it.
   _material = lv_label_create(page);
   lv_obj_set_style_text_font(_material, &lv_font_montserrat_18, LV_PART_MAIN);
-  lv_obj_align(_material, LV_ALIGN_BOTTOM_MID, 0, -22);
+  lv_obj_align(_material, LV_ALIGN_BOTTOM_MID, 0, -13);
 
   // The two actions this page's question leads to, on the same lower diagonals
-  // the printing page puts pause and cancel on. Down is into the hotend.
+  // the printing page puts pause and cancel on.
+  //
+  // The tray arrows rather than plain chevrons: an arrow on its own is just a
+  // direction, and up and down are the wrong axis anyway - filament goes in and
+  // out, and which way that is depends on where you are standing. An arrow into
+  // a tray and an arrow out of one say load and unload without needing the
+  // machine's geometry agreed first.
   _key_load = corner::create(
-      page, corner::Slot::kSW, LV_SYMBOL_DOWN, COLOR_LOAD, _load_handler);
+      page, corner::Slot::kSW, LV_SYMBOL_DOWNLOAD, COLOR_LOAD, _load_handler);
   _key_unload = corner::create(
-      page, corner::Slot::kSE, LV_SYMBOL_UP, COLOR_UNLOAD, _unload_handler);
+      page, corner::Slot::kSE, LV_SYMBOL_UPLOAD, COLOR_UNLOAD, _unload_handler);
 
   printer_update(state);
   return page;

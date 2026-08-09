@@ -34,9 +34,15 @@
 #define STALE_TIMEOUT_MS 3000
 
 #define STALE_MARK_SIZE 18
-// Bottom middle, below where the tool page's material name sits and above the
-// rim. Nothing is touchable down here on any page.
-#define STALE_MARK_Y -2
+// Above the pool rather than below the readout. It was at the very bottom,
+// which forced the tool page's pool deeper and its material name up to clear
+// it - a whole page's proportions bent around a mark that is only there when
+// something has gone wrong.
+//
+// This band is genuinely empty on every page: the corner marks sit either side
+// of it on the diagonals, and nothing is ever drawn down the middle between
+// them.
+#define STALE_MARK_Y -40
 #define COLOR_STALE 0xE07A5F
 
 // Corner controls sit at the four diagonals, where the physical keys go.
@@ -176,11 +182,11 @@
 // Depth of the pool of loaded filament along the bottom of the tool page - the
 // printing page's fill, at rest. Deep enough to read as a body of colour, shallow
 // enough to stay clear of the corner marks at 150-188.
-// 44, not 36: the stale-link mark sits at the very bottom, and the material
-// name had to move up to clear it. Both now sit inside the pool, which matters
-// because the name's ink is chosen against the pool's colour - half a line of
-// black text on black glass is not a readout.
-#define POOL_H 44
+// Deep enough to read as a body of colour, shallow enough to stay clear of the
+// corner marks at 150-188. The material name has to sit wholly inside it: the
+// name's ink is chosen against the pool's colour, so half a line of black text
+// on black glass is not a readout.
+#define POOL_H 36
 
 // Readouts sit on a scrim - a dark pill sized to the text - so they never have
 // to be legible against the filament colour directly. Black over black is a

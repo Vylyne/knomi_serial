@@ -145,6 +145,13 @@
 // heater was set or cleared.
 #define TARGET_OPA LV_OPA_50
 
+// The waiting screen's arc: how far it turns each tick, how wide it is, and
+// how often. One angle advanced by hand rather than lv_spinner's two - see
+// init_screen for why.
+#define SPINNER_TICK_MS 33
+#define SPINNER_STEP 8
+#define SPINNER_SPAN 80
+
 // Where the readout line sits under the tool tag. The same on both pages, so
 // the two read as one machine at two moments rather than two layouts.
 #define READOUT_Y 58
@@ -256,6 +263,12 @@
 #define COLOR_GCODE_HIGHLIGHT lv_color_hex(0x444444)
 
 #define SERIAL_BAUD_RATE 115200
+// Room for a few snapshot lines, so the sender can top the buffer up and go
+// back to drawing rather than waiting on the wire.
+#define SERIAL_TX_BUFFER 2048
 #define SERIAL_TIMEOUT 1000
+// A snapshot that has written nothing for this long has stopped being able to,
+// so it stops and hands its buffer back.
+#define SNAPSHOT_STALL_MS 5000
 
 #endif

@@ -31,7 +31,16 @@ namespace ui
   };
 
   void _send_report(const char *sleep_state, const RenderStats &stats);
-  void _send_snapshot();
+  void _send_snapshot_slice();
+
+  //: How far through the frame the sender is, and whether it is sending.
+  static uint32_t _snap_at = 0;
+  static bool _snap_sending = false;
+  //: When it last managed to write something. A sender that cannot make
+  //: progress gives up rather than holding 115kB of PSRAM for ever - which is
+  //: exactly what happened when the transmit buffer turned out to be smaller
+  //: than one line and the "only write if it fits" test could never pass.
+  static uint32_t _snap_moved_at = 0;
 
   void ui_task(void *param)
   {
@@ -152,7 +161,20 @@ namespace ui
       if (_snapshot_pending && display::capture_complete())
       {
         _snapshot_pending = false;
-        _send_snapshot();
+        // Frozen, not ended: the buffer stays, but the flush callback stops
+        // writing to it, so the screen can carry on drawing while it ships.
+        display::capture_freeze();
+        char begin[64];
+        snprintf(begin, sizeof(begin), "SNAP:BEGIN:%d,%d,RGB565LE", (int)RES_H,
+                 (int)RES_V);
+        printer::send::send_line(begin);
+        _snap_at = 0;
+        _snap_moved_at = millis();
+        _snap_sending = true;
+      }
+      if (_snap_sending)
+      {
+        _send_snapshot_slice();
       }
 
       // Report our own state upstream. This repeats rather than announcing once
@@ -190,39 +212,50 @@ namespace ui
   // 384 bytes a line, which is 512 of base64. Small enough that the line buffer
   // is stack-sized, large enough that the ten-byte prefix is noise rather than
   // a third of the traffic.
-  void _send_snapshot()
+  //: Push as much of the frame as the UART will take without blocking, then
+  //: return so the loop can draw a frame.
+  //:
+  //: This used to be one loop that ran to completion, which held the UI task
+  //: for the whole fourteen seconds the transfer takes: no lv_task_handler, so
+  //: animations froze and then jumped, and the status reports stopped dead. On
+  //: the waiting screen that looked like two spinners interleaving.
+  //:
+  //: The frame itself is captured in an instant. Only shipping it is slow, and
+  //: there is no reason the screen has to stand still for that - the buffer is
+  //: frozen the moment it is complete, so drawing can carry on into a screen
+  //: the sender is no longer reading.
+  void _send_snapshot_slice()
   {
     static const char *kB64 =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     static const uint32_t kRaw = 384;
+    static const int kLine = 6 + (kRaw / 3) * 4 + 8;
 
-    const uint16_t *frame = display::capture_frame();
-    if (!frame)
+    const uint8_t *src = (const uint8_t *)display::capture_frame();
+    uint32_t total = (uint32_t)RES_H * RES_V * sizeof(uint16_t);
+    if (!src)
     {
       printer::send::send_line("SNAP:ERR:no frame");
+      _snap_sending = false;
+      display::capture_end();
       return;
     }
 
-    char begin[64];
-    snprintf(
-        begin, sizeof(begin), "SNAP:BEGIN:%d,%d,RGB565LE", (int)RES_H, (int)RES_V);
-    printer::send::send_line(begin);
-
-    const uint8_t *src = (const uint8_t *)frame;
-    uint32_t total = (uint32_t)RES_H * RES_V * sizeof(uint16_t);
-    char line[6 + (kRaw / 3) * 4 + 8];
-
-    for (uint32_t at = 0; at < total; at += kRaw)
+    char line[kLine];
+    uint32_t before = _snap_at;
+    // Only while there is room in the transmit buffer. Serial.write blocks once
+    // it is full, and blocking is the thing this exists to avoid.
+    while (_snap_at < total && Serial.availableForWrite() > kLine)
     {
-      uint32_t n = total - at < kRaw ? total - at : kRaw;
+      uint32_t n = total - _snap_at < kRaw ? total - _snap_at : kRaw;
       char *out = line;
       *out++ = 'S'; *out++ = 'N'; *out++ = 'A'; *out++ = 'P'; *out++ = ':';
 
       for (uint32_t i = 0; i < n; i += 3)
       {
-        uint32_t bits = (uint32_t)src[at + i] << 16;
-        if (i + 1 < n) bits |= (uint32_t)src[at + i + 1] << 8;
-        if (i + 2 < n) bits |= (uint32_t)src[at + i + 2];
+        uint32_t bits = (uint32_t)src[_snap_at + i] << 16;
+        if (i + 1 < n) bits |= (uint32_t)src[_snap_at + i + 1] << 8;
+        if (i + 2 < n) bits |= (uint32_t)src[_snap_at + i + 2];
         *out++ = kB64[(bits >> 18) & 0x3F];
         *out++ = kB64[(bits >> 12) & 0x3F];
         *out++ = (i + 1 < n) ? kB64[(bits >> 6) & 0x3F] : '=';
@@ -230,15 +263,27 @@ namespace ui
       }
       *out = '\0';
       printer::send::send_line(line);
-
-      // The UART blocks once its buffer is full, so this is already paced by
-      // the link - but yielding keeps the receive task fed and the watchdog
-      // quiet through the fourteen seconds this takes.
-      delay(1);
+      _snap_at += n;
     }
 
-    printer::send::send_line("SNAP:END");
-    display::capture_end();
+    if (_snap_at > before)
+    {
+      _snap_moved_at = millis();
+    }
+    else if (millis() - _snap_moved_at > SNAPSHOT_STALL_MS)
+    {
+      printer::send::send_line("SNAP:ERR:stalled");
+      _snap_sending = false;
+      display::capture_end();
+      return;
+    }
+
+    if (_snap_at >= total)
+    {
+      printer::send::send_line("SNAP:END");
+      _snap_sending = false;
+      display::capture_end();
+    }
   }
 
   void _send_report(const char *sleep_state, const RenderStats &stats)

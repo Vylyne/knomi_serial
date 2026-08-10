@@ -112,6 +112,10 @@ bool capture_complete() {
   return _capturing && _capture_px >= (uint32_t)RES_H * RES_V;
 }
 
+void capture_freeze() {
+  _capturing = false;
+}
+
 const uint16_t *capture_frame() {
   return _capture;
 }

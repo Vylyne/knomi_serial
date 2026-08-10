@@ -32,6 +32,11 @@ bool capture_begin();
 //: Whether a full frame has been collected since capture_begin.
 bool capture_complete();
 
+//: Stop writing into the buffer but keep it, so the frame can be read out at
+//: leisure while the UI carries on drawing. Without this, sending would be
+//: racing the flush callback for the same memory.
+void capture_freeze();
+
 //: The captured frame: RES_H*RES_V pixels, native-endian RGB565, or null.
 //: Valid until the next capture_begin.
 const uint16_t *capture_frame();

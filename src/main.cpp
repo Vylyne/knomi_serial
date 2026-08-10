@@ -12,6 +12,11 @@
 #include "user_conf.h"
 
 void setup() {
+  // Bigger than one snapshot line, and before begin() because that is when the
+  // buffer is allocated. The default is 256 bytes - smaller than the 526 a
+  // line takes - so the sender, which only writes when a whole line will fit
+  // without blocking, could never write anything at all.
+  Serial.setTxBufferSize(SERIAL_TX_BUFFER);
   Serial.begin(SERIAL_BAUD_RATE);
   Serial.setTimeout(SERIAL_TIMEOUT);
   Wire.begin(I2C0_SDA_PIN, I2C0_SCL_PIN, I2C0_SPEED);

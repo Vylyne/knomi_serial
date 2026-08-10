@@ -296,10 +296,54 @@ Klipper's config parser keeps newlines in an indented multi-line value — the
 same mechanism `[gcode_macro]` bodies rely on — so this needs no special
 handling on the host.
 
-On the wire it costs nothing structural. Names ship as one string, newline
-between rows and comma within a row, parsed once when config is adopted rather
-than per tick — the same shape `gcodes` already uses. The values frame is then a
-flat array in reading order, which is declaration order.
+### A layout per machine state
+
+What is worth showing while a print runs is not what is worth showing while the
+machine sits idle. So: one layout per state, and the default covers anything not
+given one.
+
+```ini
+[knomi_serial chamber_panel]
+template: sensors
+
+# What exists. Declared once, whatever is on screen.
+sensors:
+    chamber = heater_chamber
+    exhaust = fan_generic exhaust
+    filter  = fan_generic nevermore
+
+# How it is arranged. `layout:` is the default and covers every state without
+# one of its own.
+layout:
+    chamber
+    exhaust, filter
+
+layout_printing:
+    chamber, exhaust
+```
+
+Declaring *what exists* separately from *how it is arranged* is the part that
+matters. It keeps the values array one fixed thing in one fixed order, so the
+state changing does not change what the numbers on the wire mean — and it lets
+two states show the same sensor without declaring it twice. A layout is then
+only a set of references, and the whole per-state feature costs no extra bytes
+in the tick at all.
+
+It also needs nothing new at runtime: screens are already torn down and rebuilt
+whenever the printer's status changes, so picking a different arrangement is
+that same rebuild reading a different list.
+
+### What it costs on the wire
+
+Names ship as one string, newline between rows and comma within a row, parsed
+once when config is adopted rather than per tick — the same shape `gcodes`
+already uses. The values frame is a flat array in declaration order.
+
+The one structural consequence: several layouts will not fit a fixed-size
+`CONFIG`. The framing already carries a length, so a variable-length payload is
+possible today — it is `config::apply` insisting on an exact size that would
+have to give, becoming a fixed header plus a variable tail. Cheap to design in
+now, tedious to retrofit later, which is the reason this paragraph exists.
 
 | template | needs | shows |
 | --- | --- | --- |

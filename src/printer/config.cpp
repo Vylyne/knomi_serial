@@ -53,6 +53,14 @@ void _defaults(Config *c) {
   c->key_mask = CORNER_LEGEND_KEYS;
   c->estop_at = (uint8_t)ESTOP_AT;
 
+  const Readout readouts[] = DEFAULT_READOUTS;
+  memset(c->readouts, 0, sizeof(c->readouts));
+  for (size_t i = 0; i < sizeof(readouts) / sizeof(readouts[0]) &&
+                     i < kMaxReadouts;
+       i++) {
+    c->readouts[i] = (uint8_t)readouts[i];
+  }
+
   const Page defaults[] = DEFAULT_PAGES;
   memset(c->page_order, 0, sizeof(c->page_order));
   for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]) &&
@@ -156,6 +164,9 @@ bool apply(const void *payload, uint32_t len) {
   }
   if (wire.present & kHasEstopAt) {
     c->estop_at = wire.estop_at;
+  }
+  if (wire.present & kHasReadouts) {
+    memcpy(c->readouts, wire.readouts, sizeof(c->readouts));
   }
   if (wire.present & kHasGcodes) {
     memcpy(c->gcodes, wire.gcodes, sizeof(c->gcodes));

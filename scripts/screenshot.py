@@ -48,7 +48,7 @@ _TIMEOUT = 40.0
 PRESETS = {
     "idle": dict(status=k.PrinterStatus.IDLE),
     "printing": dict(status=k.PrinterStatus.PRINTING, working=True, progress=54,
-                     flow=2600, eta=1870, elapsed=2200, layer=96, layer_total=180),
+                     flow=2600),
     "heating": dict(status=k.PrinterStatus.IDLE, hotend_temp=160, working=True),
     "shutdown": dict(status=k.PrinterStatus.SHUTDOWN),
     "waiting": dict(status=k.PrinterStatus.DISCONNECTED),
@@ -73,7 +73,7 @@ def state_for(preset, config_crc, color=0x9572BF, ftype=b"ABS"):
         used=True, active=True, tool_number=0,
         hotend_temp=243, hotend_target=245,
         bed_temp=100, bed_target=100,
-        chamber_temp=50, chamber_target=50,
+        chamber_temp=50, chamber_target=50, mcu_temp=42,
         filament_color=color, filament_type=ftype,
         config_crc=config_crc,
     )

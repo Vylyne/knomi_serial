@@ -19,7 +19,10 @@ Colour carries three separate things and never mixes them.
 
 **Filament** is whatever the slicer loaded — the purple above — and it is the
 fill that rises with progress, its surface moving with the extruder so the
-screen says the machine is *working* rather than merely part-way through.
+screen says the machine is *working* rather than merely part-way through. The
+fill is the *only* progress indicator: a numeral saying the same thing spent the
+largest element on the screen restating it, and on a toolchanger it restated a
+property of the job as the biggest thing on a tool's screen.
 **Heat** is a gradient behind everything, anchored to the target rather than to
 a temperature: 60 °C on the way to 65 is nearly there, 60 °C on the way to 250
 has barely started. The **machine's own accent** — the pink dots either side of
@@ -182,6 +185,14 @@ sleep_time:      # Seconds idle before the backlight goes out. Default 60.
 estop_at:        # Which side of the page row the emergency stop hangs off,
                  # bottom or top. Bottom means swipe up to reach it, top means
                  # pull down. Default bottom.
+
+readouts:        # Which secondary temperatures show beside the hotend, in
+                 # order, from bed, chamber, mcu. One that the machine does not
+                 # have is skipped, so listing it costs nothing.
+                 # Default: bed, chamber
+                 # A toolchanger usually wants: readouts: mcu
+                 # - the bed is the same on every screen, while the tool's own
+                 #   MCU sits in the chamber and only that screen can report it.
 ```
 
 These reach the device over the config channel, which it asks for whenever what

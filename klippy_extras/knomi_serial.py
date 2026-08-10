@@ -57,25 +57,28 @@ _UNKNOWN = -1
 #:    state packet - which was most of it. See the note above _STATE_FMT.
 #: 4: config carries the page list, so there is one firmware rather than a
 #:    toolchanger build and a non-toolchanger one.
-_PROTO_VERSION = 4
+#: 5: dropped eta, elapsed, layer and layer_total - nothing read them - and
+#:    made the secondary readouts a configured list. The MCU pair stayed and is
+#:    now shown: on a toolchanger that MCU sits in the heated chamber.
+_PROTO_VERSION = 5
 
 #: The state frame's payload, field for field against `struct State` in
 #: src/printer/printer.h, down to and including filament_type. `!` means network
 #: order and no padding of its own, so the layout here is the struct's layout.
 #:
-#: 96 bytes, against proto 2's 332. The macro list was 256 of those and had not
+#: 80 bytes, against proto 2's 332. The macro list was 256 of those and had not
 #: changed since Klipper started; at 10Hz it alone was 2.5 kB/s of an 11.5 kB/s
 #: link, spent restating a constant. It now goes in _CONFIG_FMT, sent when the
 #: device asks for it.
 #:
 #: Changing this means changing that struct, bumping _PROTO_VERSION, and
 #: updating the static_asserts that pin its size.
-_STATE_FMT = "!I7?B10iI5iI16s"
+_STATE_FMT = "!I7?B10iIiI16s"
 _STATE_SIZE = struct.calcsize(_STATE_FMT)
 
 #: The config frame's payload, against `struct Config`. The fourth byte was
 #: padding until estop_at claimed it, which is why the size did not change.
-_CONFIG_FMT = "!5I4B8B256s"
+_CONFIG_FMT = "!5I4B4B8B256s"
 _CONFIG_SIZE = struct.calcsize(_CONFIG_FMT)
 
 #: Page ids, against `enum class Page`. Order in the list is the order on the
@@ -98,6 +101,14 @@ _HAS_GCODES = 1 << 6
 _HAS_KEY_MASK = 1 << 7
 _HAS_PAGE_ORDER = 1 << 8
 _HAS_ESTOP_AT = 1 << 9
+_HAS_READOUTS = 1 << 10
+
+#: Secondary readout ids, against `enum class Readout`. Which of these a screen
+#: shows is a fact about the machine: a single-toolhead printer wants its bed,
+#: while four tool screens each restating the one bed temperature is four copies
+#: of something none of them owns.
+_READOUTS = {"bed": 1, "chamber": 2, "mcu": 3}
+_MAX_READOUTS = 4
 
 #: Which side of the page row the e-stop hangs off, against `enum class
 #: EstopAt`. Bottom means drag up to reach it; top is the notification-shade
@@ -193,10 +204,6 @@ def encode_state(state):
         int(state.tool_number),
         int(state.filament_color),
         int(state.flow),
-        int(state.eta),
-        int(state.elapsed),
-        int(state.layer),
-        int(state.layer_total),
         int(state.config_crc),
         state.filament_type,
     )
@@ -225,6 +232,7 @@ def config_payload(config):
         config.dim_brightness,
         config.key_mask,
         config.estop_at,
+        *_fixed(config.readouts, _MAX_READOUTS),
         *_page_bytes(config.pages),
         config.gcodes,
     )
@@ -232,8 +240,13 @@ def config_payload(config):
 
 def _page_bytes(pages):
     """A page list as the fixed-width, zero-terminated array the device reads."""
-    out = list(pages)[:_MAX_PAGES]
-    return out + [0] * (_MAX_PAGES - len(out))
+    return _fixed(pages, _MAX_PAGES)
+
+
+def _fixed(ids, width):
+    """An id list padded and zero-terminated to a fixed width."""
+    out = list(ids)[:width]
+    return out + [0] * (width - len(out))
 
 
 def encode_message(text):
@@ -303,13 +316,6 @@ class PrinterState:
     #: Extrusion rate in micrometres of filament per second, signed.
     flow: int = 0
 
-    #: Seconds left and seconds so far, or _UNKNOWN.
-    eta: int = _UNKNOWN
-    elapsed: int = _UNKNOWN
-
-    layer: int = _UNKNOWN
-    layer_total: int = _UNKNOWN
-
     #: CRC32 of the config payload this host is holding. The device compares it
     #: against the config it has and asks again if they differ.
     config_crc: int = 0
@@ -344,6 +350,9 @@ class DeviceConfig:
     #: Page ids in order, from _PAGES. Padded and terminated on the way out.
     pages: tuple = ()
 
+    #: Readout ids in order, from _READOUTS.
+    readouts: tuple = ()
+
     gcodes: bytes = b""
 
 
@@ -371,10 +380,6 @@ class SharedState:
     #: Only the active tool's screen gets it - a docked tool is not extruding,
     #: whatever the toolhead is doing.
     flow: int = 0
-    eta: int = _UNKNOWN
-    elapsed: int = _UNKNOWN
-    layer: int = _UNKNOWN
-    layer_total: int = _UNKNOWN
 
 
 @dataclasses.dataclass
@@ -558,7 +563,6 @@ class KnomiCluster:
             provider = self.virtual_sdcard.get_virtual_sdcard_gcode_provider()
 
         progress = provider.progress() * 100
-        elapsed, eta, layer, layer_total = self._job_timing(eventtime, progress)
 
         return SharedState(
             status=status,
@@ -575,10 +579,6 @@ class KnomiCluster:
             tram_type=self.tram_type,
             active_extruder=self.toolhead.get_extruder().get_name(),
             flow=self._flow(eventtime),
-            eta=eta,
-            elapsed=elapsed,
-            layer=layer,
-            layer_total=layer_total,
         )
 
     def _flow(self, eventtime):
@@ -600,41 +600,6 @@ class KnomiCluster:
             return int(status["live_extruder_velocity"] * 1000)
         except (KeyError, TypeError, ValueError):
             return 0
-
-    def _job_timing(self, eventtime, progress):
-        """Seconds elapsed, seconds left, and where we are in the layer stack.
-
-        The estimate is file progress extrapolated linearly, which is the same
-        arithmetic every other display does and is wrong in the same familiar
-        ways - long first layers pull it high, and it settles as the job runs.
-        Klipper does not compute one, and inventing a better model here would
-        mean disagreeing with the number the user already sees in Mainsail.
-        """
-        try:
-            stats = self.print_stats.get_status(eventtime)
-        except Exception:
-            return _UNKNOWN, _UNKNOWN, _UNKNOWN, _UNKNOWN
-
-        if stats.get("state") not in _ACTIVE_PRINT_STATES:
-            return _UNKNOWN, _UNKNOWN, _UNKNOWN, _UNKNOWN
-
-        elapsed = int(stats.get("print_duration") or 0)
-
-        eta = _UNKNOWN
-        # Below a percent the extrapolation divides by almost nothing and
-        # produces days. Better to say nothing until the job has some history.
-        if progress >= 1.0 and elapsed > 0:
-            eta = int(elapsed * (100.0 - progress) / progress)
-
-        info = stats.get("info") or {}
-        layer = info.get("current_layer")
-        layer_total = info.get("total_layer")
-        return (
-            elapsed,
-            eta,
-            _UNKNOWN if layer is None else int(layer),
-            _UNKNOWN if layer_total is None else int(layer_total),
-        )
 
     def _bed(self, eventtime):
         """Whichever bed any device configured. There is only one bed."""
@@ -936,6 +901,27 @@ class Knomi_Serial:
 
         values["estop_at"] = _take(_HAS_ESTOP_AT, "estop_at", _estop_at)
 
+        def _readouts(raw):
+            order = []
+            for name in str(raw).replace(",", " ").split():
+                which = name.strip().lower()
+                if which not in _READOUTS:
+                    raise config.error(
+                        f"{self.name}: readouts '{name}' is not one of "
+                        f"{', '.join(_READOUTS)}",
+                    ) from None
+                if _READOUTS[which] in order:
+                    raise config.error(
+                        f"{self.name}: readouts lists '{which}' twice")
+                order.append(_READOUTS[which])
+            if len(order) > _MAX_READOUTS:
+                raise config.error(
+                    f"{self.name}: at most {_MAX_READOUTS} readouts, "
+                    f"got {len(order)}")
+            return tuple(order)
+
+        readouts = _take(_HAS_READOUTS, "readouts", _readouts)
+
         gcodes = b""
         raw_gcodes = config.get("gcodes", None)
         if raw_gcodes is not None:
@@ -959,6 +945,7 @@ class Knomi_Serial:
             # Kept out of `values` because its empty value is a tuple, not the 0
             # every other unset field collapses to.
             pages=pages or (),
+            readouts=readouts or (),
             **{key: (0 if value is None else value) for key, value in values.items()},
         )
 
@@ -1078,10 +1065,6 @@ class Knomi_Serial:
                 # Only the mounted tool is extruding. A docked one shares the
                 # toolhead's motion report and none of its filament.
                 flow=shared.flow if active else 0,
-                eta=shared.eta,
-                elapsed=shared.elapsed,
-                layer=shared.layer,
-                layer_total=shared.layer_total,
                 config_crc=self.config_crc,
                 tram_type=shared.tram_type,
                 filament_type=tool.type.encode("utf-8")[:_FILAMENT_TYPE_MAX_LEN],

@@ -247,16 +247,6 @@ class Sim:
             return -4500
         return int(swell + ripple)
 
-    def timing(self, label, progress):
-        """Seconds gone, seconds left, and the layer stack."""
-        if label != "printing":
-            return k._UNKNOWN, k._UNKNOWN, k._UNKNOWN, k._UNKNOWN
-        total = self.args.duration
-        elapsed = int(total * progress / 100.0)
-        eta = k._UNKNOWN if progress < 1.0 else int(total - elapsed)
-        layers = 180
-        return elapsed, eta, max(1, int(layers * progress / 100.0)), layers
-
     def state(self):
         args = self.args
         label, progress, hot, tgt, bed, bedt = self.phase()
@@ -291,8 +281,6 @@ class Sim:
         if args.type is not None:
             ftype = args.type
 
-        elapsed, eta, layer, layer_total = self.timing(label, progress)
-
         return label, k.PrinterState(
             status=status,
             working=self.working,
@@ -308,16 +296,12 @@ class Sim:
             bed_target=bedt,
             chamber_temp=args.chamber,
             chamber_target=0,
-            mcu_temp=0,
+            mcu_temp=args.mcu,
             mcu_target=0,
             progress=progress,
             tool_number=args.tool,
             filament_color=int(colour, 16),
             flow=self.flow(label) if args.active else 0,
-            eta=eta,
-            elapsed=elapsed,
-            layer=layer,
-            layer_total=layer_total,
             config_crc=self.config_crc,
             tram_type=k.PrinterTramType.QGL,
             filament_type=ftype.encode("utf-8")[:15],
@@ -429,6 +413,9 @@ def main():
     p.add_argument("--hotend", type=float, help="pin hotend temperature")
     p.add_argument("--target", type=float, help="pin hotend target")
     p.add_argument("--chamber", type=float, default=0, help="chamber temperature")
+    p.add_argument("--mcu", type=float, default=42,
+                   help="tool MCU temperature, which on a toolchanger sits in "
+                        "the heated chamber")
     p.add_argument("--flow", type=float,
                    help="pin extrusion rate, micrometres/s (negative retracts)")
     p.add_argument("--machine-color", "--machine-colour", dest="machine_color",

@@ -6,6 +6,7 @@
 #include "board_conf.h"
 #include "printer/send/send_cmd.h"
 #include "ui/corner.h"
+#include "ui/readouts.h"
 #include "ui/theme.h"
 #include "user_conf.h"
 
@@ -42,6 +43,7 @@ static int32_t _bed = INT32_MIN;
 static int32_t _bed_target = INT32_MIN;
 static int32_t _chamber = INT32_MIN;
 static int32_t _chamber_target = INT32_MIN;
+static int32_t _mcu = INT32_MIN;
 static int32_t _tool = INT32_MIN;
 static uint32_t _color = 0xFFFFFFFFu;
 static char _type[printer::kFilamentTypeMaxLen + 1] = {0};
@@ -66,6 +68,7 @@ static void _forget() {
   _bed_target = INT32_MIN;
   _chamber = INT32_MIN;
   _chamber_target = INT32_MIN;
+  _mcu = INT32_MIN;
   _tool = INT32_MIN;
   _color = 0xFFFFFFFFu;
   _type[0] = '\0';
@@ -107,10 +110,13 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   lv_obj_set_style_text_font(_hero, &lv_font_montserrat_48, LV_PART_MAIN);
   lv_obj_align(_hero, LV_ALIGN_CENTER, 0, -12);
 
+  // Hung off the right of the hero, baseline aligned, rather than centred
+  // under it. Aligning to the hero means the hero itself never moves for it -
+  // the big number is what the eye anchors on, and centring the pair would
+  // slide it sideways every time a heater was set or cleared.
   _target = lv_label_create(page);
   lv_obj_set_style_text_font(_target, &lv_font_montserrat_16, LV_PART_MAIN);
-  lv_obj_set_style_text_opa(_target, LV_OPA_70, LV_PART_MAIN);
-  lv_obj_align(_target, LV_ALIGN_CENTER, 0, 30);
+  lv_obj_set_style_text_opa(_target, TARGET_OPA, LV_PART_MAIN);
 
   // The fill at rest. On the printing page this rectangle rises with progress;
   // here it sits at the bottom as a shallow pool of whatever is loaded, so the
@@ -213,6 +219,10 @@ void printer_update(const printer::State &state) {
     lv_label_set_text_fmt(_hero, "%d", (int)_hot);
     lv_obj_set_style_text_color(
         _hero, theme::heat_ink(_hot, _hot_target), LV_PART_MAIN);
+    // Re-anchored here because the hero's width changes with its digits, and
+    // the target rides its right edge.
+    lv_obj_align_to(_target, _hero, LV_ALIGN_OUT_RIGHT_BOTTOM, TARGET_GAP,
+                    -TARGET_LIFT);
 
     if (_hot_target > 0) {
       lv_label_set_text_fmt(_target, "/ %d", (int)_hot_target);
@@ -226,41 +236,24 @@ void printer_update(const printer::State &state) {
     }
   }
 
-  // MCU temperature is deliberately not here. It is a diagnostic rather than
-  // something you act on at the machine, the host already reports it in
-  // get_status where the updater reads it, and a third pair of numbers pushes
-  // this line past the width the glass has at that height.
+  // Whichever readouts are configured, formatted by ui::readouts so this page
+  // and the printing page cannot drift into rendering the same numbers
+  // differently.
   if (state.bed_temp != _bed || state.bed_target != _bed_target ||
       state.chamber_temp != _chamber ||
-      state.chamber_target != _chamber_target) {
+      state.chamber_target != _chamber_target || state.mcu_temp != _mcu) {
     _bed = state.bed_temp;
     _bed_target = state.bed_target;
     _chamber = state.chamber_temp;
     _chamber_target = state.chamber_target;
+    _mcu = state.mcu_temp;
 
     // Initialised, because a machine with neither a bed nor a chamber
     // configured takes neither branch below and this would otherwise be handed
     // to the label as raw stack - read until it happened to find a zero. Every
     // printer I tested against had a bed, which is exactly why it survived.
-    char line[48] = {0};
-    int n = 0;
-    if (_bed != 0 || _bed_target > 0) {
-      if (_bed_target > 0) {
-        n += snprintf(line + n, sizeof(line) - n, "BED %d/%d", (int)_bed,
-                      (int)_bed_target);
-      } else {
-        n += snprintf(line + n, sizeof(line) - n, "BED %d", (int)_bed);
-      }
-    }
-    if ((_chamber != 0 || _chamber_target > 0) && n < (int)sizeof(line)) {
-      const char *gap = n > 0 ? "   " : "";
-      if (_chamber_target > 0) {
-        snprintf(line + n, sizeof(line) - n, "%sCHM %d/%d", gap, (int)_chamber,
-                 (int)_chamber_target);
-      } else {
-        snprintf(line + n, sizeof(line) - n, "%sCHM %d", gap, (int)_chamber);
-      }
-    }
+    char line[64];
+    readouts::format(line, sizeof(line), state);
     lv_label_set_text(_aux, line);
   }
 

@@ -69,6 +69,7 @@
 // drag down. Overridden by `estop_at:` in printer.cfg, because which of those
 // reads as obvious is a fact about a person and not about the firmware.
 #define ESTOP_AT printer::EstopAt::kBottom
+
 // 38 on a 70 offset. At 52 on 62 the corner circle and the readout pill below
 // genuinely intersected - centres 24.8px apart against 39.5px of combined
 // radii. 70 is also the furthest the offset can go: a 19px radius at
@@ -122,6 +123,29 @@
     printer::Page::kTool, printer::Page::kGcode, printer::Page::kHome, \
         printer::Page::kMove, printer::Page::kNone,                    \
   }
+
+// Secondary readouts beside the hotend, in order, until Readout::kNone.
+// Overridden by `readouts:` in printer.cfg.
+//
+// Bed and chamber suit a single-toolhead machine. A toolchanger usually wants
+// `readouts: mcu` instead - four screens each restating the one bed temperature
+// is four copies of something none of them owns, while the MCU inside the
+// chamber is a reading only that tool can give.
+#define DEFAULT_READOUTS                                \
+  {                                                     \
+    printer::Readout::kBed, printer::Readout::kChamber, \
+        printer::Readout::kNone,                        \
+  }
+
+// How the hotend's target is drawn beside it: small and dim, hung off the right
+// of the number without moving it.
+//
+// The number must stay put whether or not there is a target - it is what the
+// eye anchors on, and centring the pair would slide it sideways every time a
+// heater was set or cleared.
+#define TARGET_OPA LV_OPA_50
+#define TARGET_GAP 4
+#define TARGET_LIFT 9
 
 // ---------------------------------------------------------------------------
 // Colour

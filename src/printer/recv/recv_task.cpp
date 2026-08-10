@@ -159,10 +159,6 @@ namespace printer
         state->tool_number = ntohl(state->tool_number);
         state->filament_color = ntohl(state->filament_color);
         state->flow = ntohl(state->flow);
-        state->eta = ntohl(state->eta);
-        state->elapsed = ntohl(state->elapsed);
-        state->layer = ntohl(state->layer);
-        state->layer_total = ntohl(state->layer_total);
         state->config_crc = ntohl(state->config_crc);
         // tram_type is a single byte now, so there is nothing to swap.
         //

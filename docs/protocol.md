@@ -41,11 +41,11 @@ link, or **29.5%** of the port, permanently.
 at startup and cannot change while Klipper is running. The link spent three
 quarters of its budget restating a constant.
 
-Proto 3's state frame is 96 bytes of payload, 107 on the wire: **9.3%**. What
+Proto 5's state frame is 80 bytes of payload, 91 on the wire: **7.9%**. What
 left the tick did not disappear — it moved to a channel that only carries it
-when it changes.
+when it changes, or it left because nothing was reading it.
 
-## `STATE` — 96 bytes
+## `STATE` — 80 bytes
 
 Matches `struct State` in `src/printer/printer.h` down to `filament_type`, and
 `_STATE_FMT` in `klippy_extras/knomi_serial.py`. Both files carry a
@@ -61,10 +61,20 @@ Matches `struct State` in `src/printer/printer.h` down to `filament_type`, and
 | 48     | `int32`    | `tool_number`, −1 for none |
 | 52     | `uint32`   | `filament_color`, `0x00RRGGBB`; 0 means unknown, not black |
 | 56     | `int32`    | `flow` — extrusion rate, µm of filament per second, signed |
-| 60     | `int32`×2  | `eta`, `elapsed` — seconds, −1 unknown |
-| 68     | `int32`×2  | `layer`, `layer_total` — −1 unknown |
-| 76     | `uint32`   | `config_crc` |
-| 80     | `char[16]` | `filament_type`, NUL-padded |
+| 60     | `uint32`   | `config_crc` |
+| 64     | `char[16]` | `filament_type`, NUL-padded |
+
+Proto 5 removed `eta`, `elapsed`, `layer` and `layer_total`. They were added
+speculatively and no screen ever read them — sixteen bytes sampled, packed, sent
+ten times a second, byte-swapped on arrival and discarded. The contract test
+makes adding a field back cheap, which is a better trade than carrying one
+against a design that does not exist yet.
+
+The MCU pair stayed and is now shown, because on a toolchanger that MCU rides
+inside the heated chamber and its temperature is a reading nothing else reports.
+It keeps a target because `sensor_mcu:` may name a `temperature_fan`, which has
+one; a plain `temperature_sensor` reports zero and the target is simply not
+drawn.
 
 The seven flags and the one-byte tram type exactly fill the gap after `status`,
 which is what keeps the `int32` block 4-byte aligned. Adding a flag consumes
@@ -86,7 +96,7 @@ print time, which is what the stepper is actually being told. The host multiplie
 by 1000 and sends µm/s. Only the mounted tool gets a non-zero value; a docked
 tool shares the toolhead's motion report and none of its filament.
 
-## `CONFIG` — 288 bytes
+## `CONFIG` — 292 bytes
 
 Everything that is true for hours at a time: the macro list, colours, the sleep
 timings, and which corners are soft keys.
@@ -100,6 +110,7 @@ timings, and which corners are soft keys.
 | `uint8`×2  | `brightness`, `dim_brightness` (0–16) |
 | `uint8`    | `key_mask` — corners that are legends: NW 1, NE 2, SW 4, SE 8 |
 | `uint8`    | `estop_at` — 0 below the page row, 1 above it |
+| `uint8[4]` | `readouts` — secondary readout ids in order, terminated by 0 |
 | `uint8[8]` | `page_order` — page ids in order, terminated by 0 |
 | `char[256]`| `gcodes`, newline-separated |
 
@@ -127,6 +138,17 @@ no G-code page — and an id this firmware has no page for is skipped rather tha
 refused, the same way an unknown frame type is. The screen lands on the first
 page built, so ordering picks the landing place too rather than needing a second
 setting that could contradict it.
+
+`readouts` is which secondary temperatures a screen shows beside its hotend,
+in the order given.
+
+    1 bed    2 chamber    3 mcu
+
+A fixed pair would have been wrong for both machines this has to serve. A
+single-toolhead printer wants its bed; four tool screens each restating the one
+bed temperature is four copies of something none of them owns, while the MCU in
+the chamber is a reading only that tool can give. A readout the machine does not
+have is skipped, so listing one costs nothing on a printer without it.
 
 `key_mask` is how a corner stops being a touch target without losing its symbol.
 A corner with a switch behind it — wired to the device, or bound to a
@@ -159,6 +181,7 @@ an option actually written in `printer.cfg`.
     key_mask                bit 7
     page_order              bit 8
     estop_at                bit 9
+    readouts                bit 10
 
 ### How it stays in sync
 

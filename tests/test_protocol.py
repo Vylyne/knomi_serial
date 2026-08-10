@@ -128,6 +128,7 @@ def test_config_presence_bits():
         "kHasKeyMask": k._HAS_KEY_MASK,
         "kHasPageOrder": k._HAS_PAGE_ORDER,
         "kHasEstopAt": k._HAS_ESTOP_AT,
+        "kHasReadouts": k._HAS_READOUTS,
     }
     check("presence bit count", sorted(bits), sorted(expected))
     for member, value in expected.items():
@@ -145,6 +146,17 @@ def test_page_ids():
     for member, value in named.items():
         check(member, value, k._PAGES[member[1:].lower()])
     check("kNone is the terminator", pages["kNone"], 0)
+
+
+def test_readout_ids():
+    ids = enum_values("Readout")
+    check("readout count", const("kMaxReadouts"), k._MAX_READOUTS)
+    named = {n: v for n, v in ids.items() if n != "kNone"}
+    check("readout names", sorted(n[1:].lower() for n in named),
+          sorted(k._READOUTS))
+    for member, value in named.items():
+        check(member, value, k._READOUTS[member[1:].lower()])
+    check("kNone is the terminator", ids["kNone"], 0)
 
 
 def test_estop_positions():

@@ -17,7 +17,11 @@ namespace printer {
 //    second for the life of the machine. See kFrame below.
 // 4: config says which pages a screen has and in what order, so there is one
 //    firmware instead of a toolchanger build and a non-toolchanger one.
-static const unsigned int kProtoVersion = 4;
+// 5: dropped four fields nothing read - eta, elapsed, layer and layer_total -
+//    and made the secondary readouts a configured list. The MCU pair stayed and
+//    is now shown, because on a toolchanger that MCU sits inside the heated
+//    chamber and its temperature is the one nobody else reports.
+static const unsigned int kProtoVersion = 5;
 
 // Every frame is
 //
@@ -101,6 +105,12 @@ struct State {
   int32_t chamber_temp   = 0;
   int32_t chamber_target = 0;
 
+  //: The tool's own MCU. On a toolchanger it rides inside the heated chamber,
+  //: so this is a health reading rather than a curiosity.
+  //:
+  //: It keeps a target because `sensor_mcu:` may name a temperature_fan, which
+  //: has one. A plain temperature_sensor reports zero, and "show the target
+  //: only when it is above zero" already tells those two apart.
   int32_t mcu_temp = 0;
   int32_t mcu_target = 0;
 
@@ -122,15 +132,6 @@ struct State {
   //: still divides by an interval the device only knows approximately, while
   //: the host knows exactly when it sampled. So the host does the division.
   int32_t flow = 0;
-
-  //: Seconds left and seconds so far, or kUnknown. Progress alone cannot say
-  //: "twenty minutes", which is the thing anyone walking past wants to know.
-  int32_t eta = kUnknown;
-  int32_t elapsed = kUnknown;
-
-  //: Current and total layer, or kUnknown when the slicer did not say.
-  int32_t layer = kUnknown;
-  int32_t layer_total = kUnknown;
 
   //: CRC32 of the config payload the host is holding.
   //:
@@ -154,7 +155,7 @@ struct State {
 
 //: Length of the kState payload. Everything in State from `message` on arrives
 //: some other way and must not be read off a state frame.
-static const unsigned int kStateWireSize = 96;
+static const unsigned int kStateWireSize = 80;
 
 // The wire format is this struct's memory layout - recv_task memcpys straight
 // into it - so a compiler that padded differently than the host packs would
@@ -195,6 +196,7 @@ enum ConfigHas : uint32_t {
   kHasKeyMask        = 1u << 7,
   kHasPageOrder      = 1u << 8,
   kHasEstopAt        = 1u << 9,
+  kHasReadouts       = 1u << 10,
 };
 
 //: Which side of the page row the emergency stop hangs off.
@@ -230,6 +232,23 @@ enum class Page : uint8_t {
 
 //: Longest page_order, terminator included.
 static const unsigned int kMaxPages = 8;
+
+//: The secondary readouts a screen can carry beside its hotend, in the order
+//: they are listed, terminated by kNone.
+//:
+//: A list rather than a fixed pair, because which of these matters is a fact
+//: about the machine. A single-toolhead printer wants its bed; four tool
+//: screens each restating the one bed temperature is four copies of something
+//: none of them owns, while the MCU inside the chamber is a reading only that
+//: tool can give.
+enum class Readout : uint8_t {
+  kNone    = 0,
+  kBed     = 1,
+  kChamber = 2,
+  kMcu     = 3,
+};
+
+static const unsigned int kMaxReadouts = 4;
 
 //: Bits of Config.key_mask - the corners that are legends rather than soft
 //: keys, because something else already reports the press.
@@ -271,6 +290,9 @@ struct Config {
   //: reserved byte can be claimed without the two ends disagreeing about size.
   uint8_t estop_at;
 
+  //: Which secondary readouts to show, in order, terminated by kNone.
+  uint8_t readouts[kMaxReadouts];
+
   //: Which pages the idle screen carries, in order, terminated by kNone. The
   //: screen lands on the first of them, so ordering chooses both the sequence
   //: and where you start.
@@ -286,7 +308,7 @@ struct Config {
   char gcodes[kGcodesMaxLen + 1];
 };
 
-static const unsigned int kConfigWireSize = 288;
+static const unsigned int kConfigWireSize = 292;
 static_assert(
     sizeof(Config) == kConfigWireSize,
     "Config layout changed: update _CONFIG_FMT and kProtoVersion");

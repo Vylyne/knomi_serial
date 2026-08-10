@@ -29,6 +29,13 @@ struct Row {
   lv_obj_t *label[printer::kMaxReadouts];
   //: Which Readout each slot shows, so update() knows what to put in it.
   uint8_t id[printer::kMaxReadouts];
+  //: Each pill's fixed width, kept so the row can be re-centred when one of
+  //: them appears or disappears.
+  int32_t width[printer::kMaxReadouts];
+  //: Bit per slot, which were visible last time the row was laid out.
+  //: Impossible to start with, so the first update always places them.
+  uint32_t laid_out;
+  int32_t y;
   int count;
   //: False when the row would not fit with targets and dropped them. Set for
   //: the whole row rather than per pill, so they stay a matching set.

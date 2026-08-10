@@ -135,7 +135,6 @@ void build(Row *row, lv_obj_t *parent, int32_t y, bool scrimmed) {
   }
   row->targets = targets;
 
-  int32_t at = -total / 2;
   for (int i = 0; i < count; i++) {
     lv_obj_t *scrim = lv_obj_create(parent);
     lv_obj_remove_style_all(scrim);
@@ -146,7 +145,6 @@ void build(Row *row, lv_obj_t *parent, int32_t y, bool scrimmed) {
       lv_obj_set_style_bg_color(scrim, lv_color_black(), LV_PART_MAIN);
       lv_obj_set_style_bg_opa(scrim, SCRIM_OPA, LV_PART_MAIN);
     }
-    lv_obj_align(scrim, LV_ALIGN_TOP_MID, at + width[i] / 2, y - kPadY);
 
     lv_obj_t *label = lv_label_create(scrim);
     lv_obj_set_style_text_font(label, &READOUT_FONT, LV_PART_MAIN);
@@ -158,15 +156,67 @@ void build(Row *row, lv_obj_t *parent, int32_t y, bool scrimmed) {
     row->scrim[i] = scrim;
     row->label[i] = label;
     row->id[i] = ids[i];
-    at += width[i] + kGap;
+    row->width[i] = width[i];
   }
   row->count = count;
+  row->y = y;
+  // Nothing placed yet. Positions are worked out in update(), because they
+  // depend on which readings the machine actually reports - and that is not
+  // known here, nor fixed afterwards.
+  row->laid_out = 0xFFFFFFFFu;
+}
+
+namespace {
+
+//: Centre whichever pills are visible.
+//:
+//: Not done once at build time. Placing all the configured pills and then
+//: hiding the absent ones leaves the survivors wherever they happened to fall -
+//: a machine with a bed and no chamber got its bed sitting in the left half
+//: with a hole beside it. Only run when the visible set changes, which is
+//: almost never.
+void _place(Row *row, uint32_t shown) {
+  int32_t total = 0;
+  int visible = 0;
+  for (int i = 0; i < row->count; i++) {
+    if (shown & (1u << i)) {
+      total += row->width[i];
+      visible++;
+    }
+  }
+  if (visible > 1) {
+    total += kGap * (visible - 1);
+  }
+
+  int32_t at = -total / 2;
+  for (int i = 0; i < row->count; i++) {
+    if (!(shown & (1u << i))) {
+      continue;
+    }
+    lv_obj_align(row->scrim[i], LV_ALIGN_TOP_MID, at + row->width[i] / 2,
+                 row->y - kPadY);
+    at += row->width[i] + kGap;
+  }
+  row->laid_out = shown;
+}
+
 }
 
 void update(Row *row, const printer::State &state) {
   if (!row) {
     return;
   }
+
+  uint32_t shown = 0;
+  for (int i = 0; i < row->count; i++) {
+    if (_value(row->id[i], state).present) {
+      shown |= 1u << i;
+    }
+  }
+  if (shown != row->laid_out) {
+    _place(row, shown);
+  }
+
   for (int i = 0; i < row->count; i++) {
     Value v = _value(row->id[i], state);
     if (!v.present) {

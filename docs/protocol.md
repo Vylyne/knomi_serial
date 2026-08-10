@@ -267,6 +267,40 @@ sensors:
     Filter  = fan_generic nevermore
 ```
 
+### The layout is the config
+
+Rows are lines; columns are entries separated by commas on one line. The shape
+you type is the shape on the glass:
+
+```ini
+sensors:                          sensors:                    sensors:
+    a, b, c                           a                           a
+                                      b, c                        b
+                                                                  c
+
+    one row of three              one, then two               a column
+```
+
+This is the part worth keeping. The expensive half of a grid was never drawing
+it — it was *choosing* it: picking between 1×2 and 2×2 and 2×3, measuring on two
+axes, and getting steadily worse if it started adapting to the length of what is
+in each tile. Letting the config say removes all of that, and nested flex does
+the remaining arithmetic on its own: a column of rows, `space-evenly` on both
+axes, no measuring.
+
+It also stops the layout caring which way the panel is mounted. A tall display
+is lines of one; a wide one is one line of several; the parser does not need to
+know the difference.
+
+Klipper's config parser keeps newlines in an indented multi-line value — the
+same mechanism `[gcode_macro]` bodies rely on — so this needs no special
+handling on the host.
+
+On the wire it costs nothing structural. Names ship as one string, newline
+between rows and comma within a row, parsed once when config is adopted rather
+than per tick — the same shape `gcodes` already uses. The values frame is then a
+flat array in reading order, which is declaration order.
+
 | template | needs | shows |
 | --- | --- | --- |
 | `tool` (default) | `heater_hotend`, `tool`, `pages` | today's UI, unchanged |
@@ -289,10 +323,10 @@ no fan — `TINT`, `CHARGE`, `WARNING`, `USB`, `SD_CARD` and so on. Real sensor
 icons mean generating a custom icon font with LVGL's converter. Solved, but a
 build step rather than a line of code. Names alone work for a first pass.
 
-**A one-axis list is both simpler and cheaper than a grid.** A column spaces on
-one axis with fixed steps; a grid has to choose a tiling (1, 1×2, 2×2, 2×3 …),
-measure on two axes, and gets worse if it starts adapting to content length.
-Worth taking the column unless something really demands otherwise.
+**Do not write a tiling algorithm.** See above — the config says the shape, and
+that is the whole reason a grid is affordable here. An automatic one would have
+to choose between 1×2 and 2×2 and 2×3, measure on two axes, and would only get
+worse the moment it started adapting to how long each label is.
 
 ## Changing any of this
 

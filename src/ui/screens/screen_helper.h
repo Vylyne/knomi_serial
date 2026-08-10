@@ -8,8 +8,14 @@
 namespace ui {
 namespace screen_helper {
 
-// A screen is a row of full-width pages you swipe between, snapping one at a
-// time.
+// A screen is two axes. Horizontally it is a row of full-width pages you swipe
+// between, snapping one at a time. Vertically it is that row and one thing
+// underneath it - the emergency stop, which is therefore one pull-down from
+// every page rather than up to four swipes along the row.
+//
+// That costs no pixels until it is asked for, which was the objection to the
+// overlay it replaces: an e-stop occupying permanent chrome on every screen of
+// every display, alongside whatever Klipper's own UI is already showing.
 //
 // Swiping is the only way through them. There used to be a pair of tap arcs at
 // the left and right edges as well, which had to claim the full height of their
@@ -28,6 +34,10 @@ namespace screen_helper {
 // inferring the page from the scroll offset - is what silently broke when
 // rotation existed, and would break again the same way.
 lv_obj_t *create_screen();
+
+//: The row inside the screen. Pages are parented to this, not to the screen -
+//: the screen's own children are the row and whatever is pulled down to.
+lv_obj_t *page_row(lv_obj_t *scr);
 
 //: Stamp each page with the position it was built in, once they all exist.
 //:

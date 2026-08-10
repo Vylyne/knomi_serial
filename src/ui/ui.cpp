@@ -144,7 +144,10 @@ const char *screen_name() {
 }
 
 int page_count() {
-  return _scr ? (int)lv_obj_get_child_count(_scr) : 0;
+  // The row's children, not the screen's - the screen has two, the row and the
+  // e-stop hanging below it.
+  lv_obj_t *row = screen_helper::page_row(_scr);
+  return row ? (int)lv_obj_get_child_count(row) : 0;
 }
 
 int page_index() {
@@ -152,7 +155,7 @@ int page_index() {
   // reorders the row, so a slot number stopped identifying a page the moment
   // the first rotation happened - and with re-centring it would now report the
   // home slot forever while you swiped past everything on the device.
-  return screen_helper::visible_page(_scr);
+  return screen_helper::visible_page(screen_helper::page_row(_scr));
 }
 
 namespace control {

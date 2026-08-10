@@ -70,6 +70,7 @@ namespace ui
     lv_obj_t *init(const printer::State &state)
     {
       lv_obj_t *scr = screen_helper::create_screen();
+      lv_obj_t *row = screen_helper::page_row(scr);
       _scr = scr;
       _update_count = 0;
       control::register_printer_update_cb(scr, _printer_update_handler);
@@ -90,29 +91,34 @@ namespace ui
         {
           continue;
         }
-        page->init(scr, state);
+        page->init(row, state);
         _updates[_update_count++] = page->update;
       }
 
-      // Last page on every screen, and never in the order - the printing
-      // screen appends it the same way. Not in `pages:` because a list written
-      // while thinking about idle pages would drop it without meaning to, and
-      // this is not the setting to learn that from.
+      // Below the row rather than at the end of it, so it is one pull-down from
+      // every page instead of up to four swipes along. Never in `pages:`: a
+      // list written while thinking about idle pages would drop it without
+      // meaning to, and this is not the setting to learn that from.
       estop_page::init(scr, state);
-      _updates[_update_count++] = estop_page::printer_update;
 
-      screen_helper::tag_pages(scr);
+      screen_helper::tag_pages(row);
       // The first page listed, so ordering picks the landing place as well as
       // the sequence rather than needing a second setting that could disagree
       // with it.
-      lv_obj_scroll_to_x(scr, 0, LV_ANIM_OFF);
+      lv_obj_scroll_to_x(row, 0, LV_ANIM_OFF);
+      lv_obj_scroll_to_y(scr, 0, LV_ANIM_OFF);
 
       return scr;
     }
 
     void _printer_update_handler(const printer::State &state)
     {
-      screen_helper::update_visible(_scr, state, _updates, _update_count);
+      screen_helper::update_visible(
+          screen_helper::page_row(_scr), state, _updates, _update_count);
+      // Not part of the row, so not covered by update_visible - and it is one
+      // pull away at all times, so it is never far enough off-screen to skip.
+      // Its update does nothing but disarm on a shutdown.
+      estop_page::printer_update(state);
     }
 
   }

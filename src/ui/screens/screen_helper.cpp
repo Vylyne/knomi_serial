@@ -84,18 +84,43 @@ void update_visible(
 }
 
 lv_obj_t *create_screen() {
+  // Two axes. The screen scrolls vertically between exactly two things - the
+  // row of pages, and whatever is pulled down to - while the row inside it
+  // scrolls horizontally between the pages themselves.
+  //
+  // LVGL routes this on its own: a drag walks up from whatever was touched
+  // looking for an ancestor that scrolls in the direction the finger started
+  // moving, so horizontal finds the row and vertical passes it and finds the
+  // screen. Nothing has to arbitrate between them.
   lv_obj_t *scr = lv_obj_create(nullptr);
   lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_OFF);
   lv_obj_add_flag(scr, LV_OBJ_FLAG_SCROLL_ONE);
-  lv_obj_set_scroll_dir(scr, LV_DIR_HOR);
-  lv_obj_set_scroll_snap_x(scr, LV_SCROLL_SNAP_CENTER);
-  lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_ROW);
+  lv_obj_set_scroll_dir(scr, LV_DIR_VER);
+  lv_obj_set_scroll_snap_y(scr, LV_SCROLL_SNAP_CENTER);
+  lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(scr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-  lv_obj_set_style_pad_column(scr, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_row(scr, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(scr, 0, LV_PART_MAIN);
   lv_obj_set_style_bg_color(scr, COLOR_BG, LV_PART_MAIN);
 
+  lv_obj_t *row = lv_obj_create(scr);
+  lv_obj_remove_style_all(row);
+  lv_obj_set_size(row, RES_H, RES_V);
+  lv_obj_set_scrollbar_mode(row, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_add_flag(row, LV_OBJ_FLAG_SCROLL_ONE);
+  lv_obj_set_scroll_dir(row, LV_DIR_HOR);
+  lv_obj_set_scroll_snap_x(row, LV_SCROLL_SNAP_CENTER);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+  lv_obj_set_style_pad_column(row, 0, LV_PART_MAIN);
+
+  lv_obj_add_event_cb(row, _scroll_end, LV_EVENT_SCROLL_END, nullptr);
   lv_obj_add_event_cb(scr, _scroll_end, LV_EVENT_SCROLL_END, nullptr);
   return scr;
+}
+
+lv_obj_t *page_row(lv_obj_t *scr) {
+  return scr ? lv_obj_get_child(scr, 0) : nullptr;
 }
 
 }

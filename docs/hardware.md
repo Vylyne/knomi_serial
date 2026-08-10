@@ -1,16 +1,12 @@
 # Knomi V2 hardware notes
 
-Read off the BTT Knomi V2.0 schematic (rev V2.2, 23 Oct 2023). Every net listed
-as *in use* below cross-checks against `src/board_conf.h`, so the mapping is
-confirmed rather than inferred — GPIO12 is the backlight, 14/18/20/19/21 are the
-LCD, 16/17 are the touch panel, and those are exactly the numbers the firmware
-already drives.
+Read off the BTT Knomi V2.0 schematic (rev V2.2, 23 Oct 2023). Every net listed as *in use* below cross-checks against `src/board_conf.h`, GPIO12 is the backlight, 14/18/20/19/21 are the LCD, 16/17 are the touch panel.
 
 ## The parts that matter
 
 | Ref | Part | Notes |
 | --- | --- | --- |
-| U1 | ESP32-S3**R8** | The `R8` is 8 MB in-package PSRAM. Currently unused. |
+| U1 | ESP32-S3**R8** | The `R8` is 8 MB in-package PSRAM. Nearly all idle — see below. |
 | U3 | LH128R-IC15-TP | 240×240 round GC9A01 panel with capacitive touch. |
 | U5 | CH340K | USB-to-UART. The only serial path — see below. |
 | U6 | MX1.25 4-pin | External I²C port. Pullups fitted. |
@@ -69,6 +65,33 @@ being about 2.48 V, but that is a 320 mV margin rather than a comfortable one.
 `GPIO33`–`GPIO37` are marked no-connect on the schematic because the S3**R8**'s
 octal PSRAM consumes them internally. They are not free pins; they are spoken for
 inside the package.
+
+## The 8 MB of PSRAM
+
+It is initialised — `BOARD_HAS_PSRAM` is in the board definition, and the
+device reports 8.0 MB free in every status line. One thing uses it: the
+screenshot framebuffer, 115,200 bytes taken with `ps_malloc` when a capture is
+asked for and freed when it is sent. Nothing holds any of it between captures.
+
+**Leaving it idle is the right answer, not an oversight.** The obvious use would
+be full-screen LVGL draw buffers instead of the two 11.5 KB statics in internal
+DRAM, and that would make things slower. Rendering is memory-write heavy — fills
+and blends — and octal PSRAM manages tens of MB/s against internal SRAM's
+hundreds. The SPI transfer is the same number of pixels either way, so the only
+gain is a few fewer flush calls, bought at the cost of every pixel being written
+across a slower bus.
+
+What PSRAM is good for here is exactly what it is doing: something large,
+short-lived, and written once. A screenshot qualifies. A framebuffer redrawn
+thirty times a second does not.
+
+If the UI ever does outgrow its budget, the lever is DMA rather than memory.
+`_flush_display` currently calls `pushColors` and then reports the flush
+complete immediately, which is synchronous — so LVGL cannot render the next
+strip while the last one transfers, and the second draw buffer it was given
+earns nothing. TFT_eSPI can push over DMA on the ESP32, which would overlap the
+two. It is not needed today: an idle screen costs 0.2% of the UI task and the
+printing screen with its wave running costs about 17%.
 
 ## Three consequences
 

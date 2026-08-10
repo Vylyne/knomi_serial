@@ -127,6 +127,7 @@ def test_config_presence_bits():
         "kHasGcodes": k._HAS_GCODES,
         "kHasKeyMask": k._HAS_KEY_MASK,
         "kHasPageOrder": k._HAS_PAGE_ORDER,
+        "kHasEstopAt": k._HAS_ESTOP_AT,
     }
     check("presence bit count", sorted(bits), sorted(expected))
     for member, value in expected.items():
@@ -144,6 +145,11 @@ def test_page_ids():
     for member, value in named.items():
         check(member, value, k._PAGES[member[1:].lower()])
     check("kNone is the terminator", pages["kNone"], 0)
+
+
+def test_estop_positions():
+    for member, value in enum_values("EstopAt").items():
+        check(member, value, k._ESTOP_AT[member[1:].lower()])
 
 
 def test_key_slot_bits():

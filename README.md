@@ -40,9 +40,14 @@ to be current, and lets the screen sleep on its normal timers again.
 ## Using it
 
 The idle screen is a row of pages you **swipe** between horizontally. Which
-pages, and in what order, is `pages:` in `printer.cfg` — the emergency stop is
-always the last one and cannot be configured away. The four corners are
-controls; see [the corner keys](#the-corner-keys).
+pages, and in what order, is `pages:` in `printer.cfg`.
+
+The **emergency stop hangs off that row vertically**, so it is one swipe from
+every page rather than several along. `estop_at: bottom` (the default) means
+drag up to reach it; `top` is the notification-shade gesture. It is never in
+`pages:` and cannot be configured away.
+
+The four corners are controls; see [the corner keys](#the-corner-keys).
 
 ## Scope, and what is finished
 
@@ -173,6 +178,10 @@ brightness:      # Backlight level, 0-16. Default 8.
 dim_brightness:  # Level once dimmed. Default 3.
 dim_time:        # Seconds idle before dimming. Default 30.
 sleep_time:      # Seconds idle before the backlight goes out. Default 60.
+
+estop_at:        # Which side of the page row the emergency stop hangs off,
+                 # bottom or top. Bottom means swipe up to reach it, top means
+                 # pull down. Default bottom.
 ```
 
 These reach the device over the config channel, which it asks for whenever what

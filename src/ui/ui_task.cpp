@@ -254,6 +254,10 @@ namespace ui
         fields,
         sizeof(fields),
         "fw=%s;proto=%u;var=%s;sleep=%s;scr=%s;page=%d;pages=%d;"
+        // Where both scrollers actually are. "which page" cannot tell a
+        // horizontal swipe that did nothing from a vertical one that worked -
+        // neither moves the page index.
+        "sx=%d;sy=%d;"
         // CRC of the config actually in force, so the host can see that what it
         // sent is what the device is running rather than assuming the push
         // landed.
@@ -272,6 +276,8 @@ namespace ui
         screen_name(),
         page_index(),
         page_count(),
+        scroll_x(),
+        scroll_y(),
         (unsigned int)printer::config::held_crc(),
         (unsigned int)ESP.getFreeHeap(),
         (unsigned int)ESP.getMinFreeHeap(),

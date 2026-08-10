@@ -51,7 +51,7 @@ void _defaults(Config *c) {
   c->brightness = DISPLAY_BRIGHTNESS;
   c->dim_brightness = SLEEP_DIM_BRIGHTNESS;
   c->key_mask = CORNER_LEGEND_KEYS;
-  c->_padding[0] = 0;
+  c->estop_at = (uint8_t)ESTOP_AT;
 
   const Page defaults[] = DEFAULT_PAGES;
   memset(c->page_order, 0, sizeof(c->page_order));
@@ -153,6 +153,9 @@ bool apply(const void *payload, uint32_t len) {
   }
   if (wire.present & kHasPageOrder) {
     memcpy(c->page_order, wire.page_order, sizeof(c->page_order));
+  }
+  if (wire.present & kHasEstopAt) {
+    c->estop_at = wire.estop_at;
   }
   if (wire.present & kHasGcodes) {
     memcpy(c->gcodes, wire.gcodes, sizeof(c->gcodes));

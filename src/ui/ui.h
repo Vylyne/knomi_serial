@@ -42,6 +42,12 @@ int page_index();
 //: the display up and swiping it.
 int page_count();
 
+//: Where the two scrollers actually are, in pixels. Reported upstream because
+//: "which page" cannot distinguish a horizontal swipe that did nothing from a
+//: vertical one that worked - both leave the page index alone.
+int scroll_x();
+int scroll_y();
+
 namespace control {
 
 void register_printer_update_cb(lv_obj_t *obj, printer_update_cb_t cb);

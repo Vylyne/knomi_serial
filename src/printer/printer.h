@@ -194,6 +194,17 @@ enum ConfigHas : uint32_t {
   kHasGcodes         = 1u << 6,
   kHasKeyMask        = 1u << 7,
   kHasPageOrder      = 1u << 8,
+  kHasEstopAt        = 1u << 9,
+};
+
+//: Which side of the page row the emergency stop hangs off.
+//:
+//: Below means you drag upward to reach it. Above is the notification-shade
+//: gesture - drag down. Which of those is "obvious" is not a fact about the
+//: firmware, so it is not the firmware's to decide.
+enum class EstopAt : uint8_t {
+  kBottom = 0,
+  kTop = 1,
 };
 
 //: The pages an idle screen can carry, as they appear on the wire.
@@ -253,7 +264,12 @@ struct Config {
   //: fire it by accident.
   uint8_t key_mask;
 
-  uint8_t _padding[1];
+  //: An EstopAt. This was the struct's one padding byte, so giving it a meaning
+  //: changed no offsets and needed no version bump - a host that predates it
+  //: sends zero, which is the behaviour that byte already had. That is the
+  //: presence-bit design paying off: `present` says what was actually set, so a
+  //: reserved byte can be claimed without the two ends disagreeing about size.
+  uint8_t estop_at;
 
   //: Which pages the idle screen carries, in order, terminated by kNone. The
   //: screen lands on the first of them, so ordering chooses both the sequence

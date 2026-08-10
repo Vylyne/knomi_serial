@@ -61,6 +61,14 @@
 //
 // 0 means every corner is soft, which is right for a bare display.
 #define CORNER_LEGEND_KEYS 0
+
+// Which side of the page row the emergency stop hangs off, so it is one swipe
+// from every page rather than up to four along the row.
+//
+// kBottom means drag up to reach it; kTop is the notification-shade gesture,
+// drag down. Overridden by `estop_at:` in printer.cfg, because which of those
+// reads as obvious is a fact about a person and not about the firmware.
+#define ESTOP_AT printer::EstopAt::kBottom
 // 38 on a 70 offset. At 52 on 62 the corner circle and the readout pill below
 // genuinely intersected - centres 24.8px apart against 39.5px of combined
 // radii. 70 is also the furthest the offset can go: a 19px radius at

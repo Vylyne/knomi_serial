@@ -26,7 +26,7 @@ lv_obj_t *init(const printer::State &state) {
   control::register_printer_update_cb(scr, _printer_update_handler);
 
   printing_page::init(row, state);
-  estop_page::init(scr, state);
+  estop_page::init(screen_helper::estop_slot(scr), state);
 
   screen_helper::tag_pages(row);
   return scr;

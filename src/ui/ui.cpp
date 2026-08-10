@@ -150,6 +150,15 @@ int page_count() {
   return row ? (int)lv_obj_get_child_count(row) : 0;
 }
 
+int scroll_x() {
+  lv_obj_t *row = screen_helper::page_row(_scr);
+  return row ? (int)lv_obj_get_scroll_x(row) : 0;
+}
+
+int scroll_y() {
+  return _scr ? (int)lv_obj_get_scroll_y(_scr) : 0;
+}
+
 int page_index() {
   // Asks which page is under the viewport, not where the viewport is. Wrapping
   // reorders the row, so a slot number stopped identifying a page the moment

@@ -73,15 +73,15 @@ _PROTO_VERSION = 4
 _STATE_FMT = "!I7?B10iI5iI16s"
 _STATE_SIZE = struct.calcsize(_STATE_FMT)
 
-#: The config frame's payload, against `struct Config`. The `x` is its explicit
-#: padding, keeping the page list and gcodes on 4-byte boundaries.
-_CONFIG_FMT = "!5I3Bx8B256s"
+#: The config frame's payload, against `struct Config`. The fourth byte was
+#: padding until estop_at claimed it, which is why the size did not change.
+_CONFIG_FMT = "!5I4B8B256s"
 _CONFIG_SIZE = struct.calcsize(_CONFIG_FMT)
 
 #: Page ids, against `enum class Page`. Order in the list is the order on the
 #: device, and the screen lands on the first of them. `estop` is deliberately
-#: absent: the device appends it whatever the list says, because a build once
-#: compiled it out and had no emergency stop at all.
+#: absent: the device appends it whatever the list says, off the side named by
+#: estop_at, so a list written for the idle pages cannot drop it by omission.
 _PAGES = {"tool": 1, "gcode": 2, "home": 3, "move": 4}
 _MAX_PAGES = 8
 
@@ -97,6 +97,13 @@ _HAS_DIM_BRIGHTNESS = 1 << 5
 _HAS_GCODES = 1 << 6
 _HAS_KEY_MASK = 1 << 7
 _HAS_PAGE_ORDER = 1 << 8
+_HAS_ESTOP_AT = 1 << 9
+
+#: Which side of the page row the e-stop hangs off, against `enum class
+#: EstopAt`. Bottom means drag up to reach it; top is the notification-shade
+#: gesture. This claimed the struct's one spare padding byte, so it changed no
+#: offsets and needed no version bump.
+_ESTOP_AT = {"bottom": 0, "top": 1}
 
 #: Bits of Config.key_mask, against `enum KeySlot`. A corner named here keeps
 #: its symbol as a legend and loses its touch target, because something else
@@ -217,6 +224,7 @@ def config_payload(config):
         config.brightness,
         config.dim_brightness,
         config.key_mask,
+        config.estop_at,
         *_page_bytes(config.pages),
         config.gcodes,
     )
@@ -331,6 +339,7 @@ class DeviceConfig:
     brightness: int = 0
     dim_brightness: int = 0
     key_mask: int = 0
+    estop_at: int = 0
 
     #: Page ids in order, from _PAGES. Padded and terminated on the way out.
     pages: tuple = ()
@@ -915,6 +924,17 @@ class Knomi_Serial:
             return tuple(order)
 
         pages = _take(_HAS_PAGE_ORDER, "pages", _pages)
+
+        def _estop_at(raw):
+            side = str(raw).strip().lower()
+            if side not in _ESTOP_AT:
+                raise config.error(
+                    f"{self.name}: estop_at '{raw}' is not one of "
+                    f"{', '.join(_ESTOP_AT)}",
+                ) from None
+            return _ESTOP_AT[side]
+
+        values["estop_at"] = _take(_HAS_ESTOP_AT, "estop_at", _estop_at)
 
         gcodes = b""
         raw_gcodes = config.get("gcodes", None)

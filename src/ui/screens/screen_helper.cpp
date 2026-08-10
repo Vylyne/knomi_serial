@@ -1,6 +1,7 @@
 #include "screen_helper.h"
 
 #include "board_conf.h"
+#include "printer/config.h"
 #include "ui/ui.h"
 #include "user_conf.h"
 
@@ -8,6 +9,26 @@ namespace ui {
 namespace screen_helper {
 
 namespace {
+
+//: Marks the page row among the screen's children, so which one it is never
+//: depends on what order they were added in. Pages carry their own tags from
+//: tag_pages, but those are children of the row rather than of the screen, so
+//: the two namespaces cannot collide.
+const intptr_t kRowTag = -1;
+
+lv_obj_t *_child_tagged(lv_obj_t *parent, intptr_t tag) {
+  if (!parent) {
+    return nullptr;
+  }
+  uint32_t count = lv_obj_get_child_count(parent);
+  for (uint32_t i = 0; i < count; i++) {
+    lv_obj_t *child = lv_obj_get_child(parent, i);
+    if ((intptr_t)lv_obj_get_user_data(child) == tag) {
+      return child;
+    }
+  }
+  return nullptr;
+}
 
 void _scroll_end(lv_event_t *e) {
   // Only the page in view and its neighbours are kept current, and only when
@@ -116,11 +137,47 @@ lv_obj_t *create_screen() {
 
   lv_obj_add_event_cb(row, _scroll_end, LV_EVENT_SCROLL_END, nullptr);
   lv_obj_add_event_cb(scr, _scroll_end, LV_EVENT_SCROLL_END, nullptr);
+  lv_obj_set_user_data(row, (void *)kRowTag);
+
+  // Both children exist before anyone asks about either, which is the whole
+  // point of building the slot here rather than letting the caller add the
+  // e-stop afterwards. That version worked out the row's index from config and
+  // was asked for it before the e-stop had been created - so with the stop
+  // configured above, `page_row` returned child 1 of a screen that had one
+  // child, handed back null, and every page was then built with a null parent.
+  lv_obj_t *slot = lv_obj_create(scr);
+  lv_obj_remove_style_all(slot);
+  lv_obj_set_size(slot, RES_H, RES_V);
+  lv_obj_remove_flag(slot, LV_OBJ_FLAG_SCROLLABLE);
+  if (printer::config::get().estop_at == (uint8_t)printer::EstopAt::kTop) {
+    lv_obj_move_to_index(slot, 0);
+  }
+
+  // Park on the row whichever side the stop ended up, so a screen never opens
+  // already showing it.
+  lv_obj_update_layout(scr);
+  lv_obj_scroll_to_y(scr, lv_obj_get_y(row), LV_ANIM_OFF);
   return scr;
 }
 
 lv_obj_t *page_row(lv_obj_t *scr) {
-  return scr ? lv_obj_get_child(scr, 0) : nullptr;
+  return _child_tagged(scr, kRowTag);
+}
+
+lv_obj_t *estop_slot(lv_obj_t *scr) {
+  // The one that is not the row. Found by elimination rather than by index, so
+  // it cannot disagree with page_row about which is which.
+  if (!scr) {
+    return nullptr;
+  }
+  uint32_t count = lv_obj_get_child_count(scr);
+  for (uint32_t i = 0; i < count; i++) {
+    lv_obj_t *child = lv_obj_get_child(scr, i);
+    if ((intptr_t)lv_obj_get_user_data(child) != kRowTag) {
+      return child;
+    }
+  }
+  return nullptr;
 }
 
 }

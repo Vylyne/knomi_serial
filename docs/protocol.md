@@ -99,6 +99,7 @@ timings, and which corners are soft keys.
 | `uint32`   | `dim_ms`, `sleep_ms` |
 | `uint8`×2  | `brightness`, `dim_brightness` (0–16) |
 | `uint8`    | `key_mask` — corners that are legends: NW 1, NE 2, SW 4, SE 8 |
+| `uint8`    | `estop_at` — 0 below the page row, 1 above it |
 | `uint8[8]` | `page_order` — page ids in order, terminated by 0 |
 | `char[256]`| `gcodes`, newline-separated |
 
@@ -113,6 +114,13 @@ more swipe past it — a preference, and preferences belong in `printer.cfg`.
 The device appends `estop` whatever the list says, so it is never sent. Keeping
 it out of the list means a `pages:` written while thinking about idle pages
 cannot drop it by omission. The printing screen appends it the same way.
+
+It hangs off the row on the second axis rather than sitting in it, so it is one
+swipe from every page instead of several along - `estop_at` picks the side.
+That byte was the struct's padding until it was given a meaning, so claiming it
+moved no offsets and needed no version bump: `present` says what was actually
+set, and a host predating it sends zero, which is the behaviour that byte
+already had.
 
 A page that would be empty is skipped — `gcode` with no macros configured gets
 no G-code page — and an id this firmware has no page for is skipped rather than
@@ -150,6 +158,7 @@ an option actually written in `printer.cfg`.
     gcodes                  bit 6
     key_mask                bit 7
     page_order              bit 8
+    estop_at                bit 9
 
 ### How it stays in sync
 

@@ -38,6 +38,11 @@ lv_obj_t *create_screen();
 //: The row inside the screen. Pages are parented to this, not to the screen -
 //: the screen's own children are the row and whatever is pulled down to.
 lv_obj_t *page_row(lv_obj_t *scr);
+lv_obj_t *estop_slot(lv_obj_t *scr);
+
+//: The container the e-stop is built into - the screen's other child, placed
+//: above or below the row as `estop_at:` says. It exists from create_screen so
+//: that neither child's identity depends on the order they were added in.
 
 //: Stamp each page with the position it was built in, once they all exist.
 //:

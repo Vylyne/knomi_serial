@@ -95,18 +95,17 @@ namespace ui
         _updates[_update_count++] = page->update;
       }
 
-      // Below the row rather than at the end of it, so it is one pull-down from
-      // every page instead of up to four swipes along. Never in `pages:`: a
-      // list written while thinking about idle pages would drop it without
-      // meaning to, and this is not the setting to learn that from.
-      estop_page::init(scr, state);
+      // Off the row rather than at the end of it, so it is one swipe from
+      // every page instead of up to four along. Which side is `estop_at:`.
+      // Never in `pages:`: a list written while thinking about idle pages would
+      // drop it without meaning to, and this is not the setting to learn from.
+      estop_page::init(screen_helper::estop_slot(scr), state);
 
       screen_helper::tag_pages(row);
       // The first page listed, so ordering picks the landing place as well as
       // the sequence rather than needing a second setting that could disagree
       // with it.
       lv_obj_scroll_to_x(row, 0, LV_ANIM_OFF);
-      lv_obj_scroll_to_y(scr, 0, LV_ANIM_OFF);
 
       return scr;
     }

@@ -243,6 +243,57 @@ from `get_status`. That is what lets the report grow without a protocol bump.
 Report keys: `fw` `proto` `var` `sleep` `scr` `page` `cfg` `heap` `minheap` `up`
 `pages` `busy` `peak` `psram` `lvfree` `lvfrag` `flush` `fpx` `fus`.
 
+## Reserved for a proto 5: screen templates
+
+Not built. Written down because the shape was worked out and is worth not
+re-deriving, and because the decisions it implies are easier to make before
+something forces them than after.
+
+Every screen today is the same kind of thing: one tool, its heat, its filament.
+A display that is not about a tool — a machine-wide status panel, chamber and
+exhaust and filter and build plate — wants none of `State`'s per-tool fields and
+several that do not exist anywhere in the protocol.
+
+Enumerating those into `State` is the wrong answer. Every screen would carry
+fans it never shows, and each new subsystem would be another version bump.
+Instead a section would declare what kind of screen it is:
+
+```ini
+[knomi_serial chamber_panel]
+template: sensors
+sensors:
+    Chamber = heater_chamber
+    Exhaust = fan_generic exhaust
+    Filter  = fan_generic nevermore
+```
+
+| template | needs | shows |
+| --- | --- | --- |
+| `tool` (default) | `heater_hotend`, `tool`, `pages` | today's UI, unchanged |
+| `sensors` | a named list | name, icon, value — and a target where one exists |
+
+The value/target rule already exists: the tool page hides the hotend's target
+line when it is zero, because no target and a target of zero are different
+facts. A sensor list is that rule applied N times.
+
+It divides cleanly across the two channels already here. Names and icons are
+static, so they belong in `CONFIG`. Only the values change, so they go in a new
+frame type carrying an array in the declared order — which is the type byte
+introduced in proto 3 doing the job it was added for, rather than another
+redesign.
+
+Two things to know before starting:
+
+**Icons need a font pipeline.** LVGL's built-in symbols have no thermometer and
+no fan — `TINT`, `CHARGE`, `WARNING`, `USB`, `SD_CARD` and so on. Real sensor
+icons mean generating a custom icon font with LVGL's converter. Solved, but a
+build step rather than a line of code. Names alone work for a first pass.
+
+**A one-axis list is both simpler and cheaper than a grid.** A column spaces on
+one axis with fixed steps; a grid has to choose a tiling (1, 1×2, 2×2, 2×3 …),
+measure on two axes, and gets worse if it starts adapting to content length.
+Worth taking the column unless something really demands otherwise.
+
 ## Changing any of this
 
 1. Edit `struct State` or `struct Config` in `src/printer/printer.h`.

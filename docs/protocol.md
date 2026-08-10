@@ -110,10 +110,15 @@ more swipe past it — a preference, and preferences belong in `printer.cfg`.
 
     1 tool    2 gcode    3 home    4 move    5 estop
 
-The device appends `estop` whatever the list says, so it is never sent: it was
-inside that build flag once and those builds had no emergency stop at all. A
-page that would be empty is skipped — `gcode` with no macros configured gets no
-G-code page — and an id this firmware has no page for is skipped rather than
+The device appends `estop` whatever the list says, so it is never sent. An
+earlier version put it on an overlay present on every screen, which was
+deliberately dropped from the toolchanger build — an emergency stop underfoot on
+four displays is not a safety feature. Nothing replaced it there, and that gap
+was accidental; appending it here means the same omission cannot recur by a
+different route.
+
+A page that would be empty is skipped — `gcode` with no macros configured gets
+no G-code page — and an id this firmware has no page for is skipped rather than
 refused, the same way an unknown frame type is. The screen lands on the first
 page built, so ordering picks the landing place too rather than needing a second
 setting that could contradict it.

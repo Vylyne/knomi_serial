@@ -21,8 +21,15 @@ namespace estop_page {
 // guard that still stops a brush against the glass from firing it.
 //
 // Replaces the STOP button that used to ride the overlay on every screen, one
-// stray touch away at all times. It was also inside a !TOOLCHANGER guard, so
-// toolchanger builds had no emergency stop of any kind.
+// stray touch away at all times. That overlay was deliberately dropped from the
+// toolchanger build - an emergency stop present on every screen of every
+// display is not a safety feature, it is four more surfaces to catch a sleeve
+// on. The gap that left was accidental rather than intended: nothing replaced
+// it, so those builds ended up with no software stop at all.
+//
+// A page answers the original objection without leaving the gap. It is not
+// underfoot, because you have to swipe to it; and swiping to it is deliberate
+// without being slow.
 //
 // None of this is a substitute for a real one. A stop that travels display to
 // serial to host to MCU is a convenience that happens to be red; the machine's

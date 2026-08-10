@@ -110,7 +110,7 @@ pages:   # Which pages the idle screen carries, in order, from
          # be empty is skipped - listing `gcode` with no `gcodes:` below gets
          # you no G-code page. The emergency stop is always last and is never
          # listed. Default: tool, gcode, home, move
-         # A toolchanger usually wants: pages: tool, gcode
+         # A multi-screen setup may only want: pages: tool, gcode
 
 # The screen shows a pair of accent dots either side of its tool tag when this
 # is the extruder the toolhead currently has mounted - which is how you tell,

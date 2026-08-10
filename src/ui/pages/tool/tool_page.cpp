@@ -238,7 +238,11 @@ void printer_update(const printer::State &state) {
     _chamber = state.chamber_temp;
     _chamber_target = state.chamber_target;
 
-    char line[48];
+    // Initialised, because a machine with neither a bed nor a chamber
+    // configured takes neither branch below and this would otherwise be handed
+    // to the label as raw stack - read until it happened to find a zero. Every
+    // printer I tested against had a bed, which is exactly why it survived.
+    char line[48] = {0};
     int n = 0;
     if (_bed != 0 || _bed_target > 0) {
       if (_bed_target > 0) {

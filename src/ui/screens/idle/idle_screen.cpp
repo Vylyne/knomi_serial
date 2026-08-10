@@ -1,13 +1,14 @@
 #include "idle_screen.h"
 
 #include "board_conf.h"
-#include "ui/screens/screen_helper.h"
+#include "printer/config.h"
 #include "ui/pages/estop/estop_page.h"
 #include "ui/pages/gcode/gcode_page.h"
 #include "ui/pages/home/home_page.h"
 #include "ui/pages/move/move_page.h"
 #include "ui/pages/none/none_page.h"
 #include "ui/pages/tool/tool_page.h"
+#include "ui/screens/screen_helper.h"
 #include "ui/ui.h"
 #include "user_conf.h"
 
@@ -18,17 +19,51 @@ namespace ui
 
     void _printer_update_handler(const printer::State &state);
 
-    //: Must be in the order the pages are built, because that is the order
-    //: tag_pages stamps them in and what update_visible indexes by.
-    const screen_helper::page_update_t _updates[] = {
-        IDLE_PAGE_0::printer_update,
-        IDLE_PAGE_1::printer_update,
-#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
-        IDLE_PAGE_2::printer_update,
-        IDLE_PAGE_3::printer_update,
-#endif
-        estop_page::printer_update,
-    };
+    namespace
+    {
+      struct PageDef
+      {
+        printer::Page id;
+        lv_obj_t *(*init)(lv_obj_t *, const printer::State &);
+        void (*update)(const printer::State &);
+        //: False if the page would have nothing in it. A page that can only be
+        //: empty is worse than one that is absent - it reads as broken.
+        bool (*worth_showing)();
+      };
+
+      bool _always() { return true; }
+
+      bool _have_macros()
+      {
+        return printer::config::get().gcodes[0] != '\0';
+      }
+
+      const PageDef kPages[] = {
+          {printer::Page::kTool, tool_page::init, tool_page::printer_update, _always},
+          {printer::Page::kGcode, gcode_page::init, gcode_page::printer_update, _have_macros},
+          {printer::Page::kHome, home_page::init, home_page::printer_update, _always},
+          {printer::Page::kMove, move_page::init, move_page::printer_update, _always},
+      };
+
+      const PageDef *_find(uint8_t id)
+      {
+        for (const PageDef &page : kPages)
+        {
+          if ((uint8_t)page.id == id)
+          {
+            return &page;
+          }
+        }
+        return nullptr;
+      }
+    }
+
+    //: Update callbacks in the order the pages were actually built, which is
+    //: what tag_pages stamps and update_visible indexes by. Built at runtime
+    //: now: it used to be a fixed array matching a fixed set of #defines, and
+    //: the two had to be kept in step by hand.
+    screen_helper::page_update_t _updates[printer::kMaxPages + 1];
+    uint32_t _update_count = 0;
 
     lv_obj_t *_scr = nullptr;
 
@@ -36,32 +71,49 @@ namespace ui
     {
       lv_obj_t *scr = screen_helper::create_screen();
       _scr = scr;
+      _update_count = 0;
       control::register_printer_update_cb(scr, _printer_update_handler);
 
-      IDLE_PAGE_0::init(scr, state);
-      IDLE_PAGE_1::init(scr, state);
+      const printer::Config &conf = printer::config::get();
+      for (unsigned int slot = 0; slot < printer::kMaxPages; slot++)
+      {
+        uint8_t id = conf.page_order[slot];
+        if (id == (uint8_t)printer::Page::kNone)
+        {
+          break;
+        }
+        const PageDef *page = _find(id);
+        // An id this firmware has no page for is skipped rather than refused.
+        // A newer host naming a page we do not have is the same situation as a
+        // frame type we do not know, and is handled the same way.
+        if (!page || !page->worth_showing())
+        {
+          continue;
+        }
+        page->init(scr, state);
+        _updates[_update_count++] = page->update;
+      }
 
-#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
-      IDLE_PAGE_2::init(scr, state);
-      IDLE_PAGE_3::init(scr, state);
-#endif
-
-      // Last page on every screen. The emergency stop used to ride the overlay,
-      // one stray touch away at all times, and was compiled out of toolchanger
-      // builds entirely - so those had none at all. A page you swipe to is
-      // deliberate without being slow.
+      // Last page on every screen, and never in the order. The emergency stop
+      // used to ride the overlay, one stray touch away at all times, and was
+      // compiled out of toolchanger builds entirely - so those had none at all.
+      // A page you swipe to is deliberate without being slow, and one that
+      // cannot be configured away stays there for the build that needs it most.
       estop_page::init(scr, state);
+      _updates[_update_count++] = estop_page::printer_update;
 
       screen_helper::tag_pages(scr);
-      lv_obj_scroll_to_x(scr, IDLE_PAGE_START * RES_H, LV_ANIM_OFF);
+      // The first page listed, so ordering picks the landing place as well as
+      // the sequence rather than needing a second setting that could disagree
+      // with it.
+      lv_obj_scroll_to_x(scr, 0, LV_ANIM_OFF);
 
       return scr;
     }
 
     void _printer_update_handler(const printer::State &state)
     {
-      screen_helper::update_visible(
-          _scr, state, _updates, sizeof(_updates) / sizeof(_updates[0]));
+      screen_helper::update_visible(_scr, state, _updates, _update_count);
     }
 
   }

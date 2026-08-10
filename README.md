@@ -37,6 +37,13 @@ to be current, and lets the screen sleep on its normal timers again.
 
 <br clear="right">
 
+## Using it
+
+The idle screen is a row of pages you **swipe** between horizontally. Which
+pages, and in what order, is `pages:` in `printer.cfg` — the emergency stop is
+always the last one and cannot be configured away. The four corners are
+controls; see [the corner keys](#the-corner-keys).
+
 ## Scope, and what is finished
 
 This fork is developed **toolchanger-first**: several displays on one printer,
@@ -44,10 +51,10 @@ one per tool, coordinated by a single Klipper module so that the state they
 share is computed once rather than once per screen. That is the case the design
 is worked out against.
 
-Single-toolhead machines are supported and are the default build, but they are
-the secondary target, and it shows. The two pages that only exist in that build
-— `home` and `move` — have not been brought into the same design language as the
-rest yet. They work; they look like the firmware this was forked from.
+Single-toolhead machines are supported by the same firmware, but they are the
+secondary target and it shows: the `home` and `move` pages have not been brought
+into the same design language as the rest. They work; they look like the
+firmware this was forked from.
 
 <table>
   <tr><th align="left">Area</th><th align="left">State</th></tr>
@@ -62,25 +69,50 @@ rest yet. They work; they look like the firmware this was forked from.
 
 ## Installation
 
-Build and flash with [PlatformIO](https://platformio.org/):
+Plug the display into the Klipper host over USB — it enumerates as a CH340
+serial port — then build and flash with [PlatformIO](https://platformio.org/):
 
 ```bash
-pio run -e knomi -t upload                # single toolhead
-pio run -e knomi_toolchanger -t upload    # toolchanger build
+pio run -e knomi -t upload
 ```
 
+One firmware, whatever the machine. There used to be a separate toolchanger
+build that compiled two pages out; it saved 1572 bytes of a 4.7 MB flash and
+cost a second image to pick between, where flashing the wrong one silently
+removed pages with nothing on screen to explain it.
+
 The Klipper module is installed by running `install.sh` on the Klipper host. It
-symlinks rather than copies, so `git pull` updates the module too.
+symlinks rather than copies, so `git pull` updates the module too. Add a config
+section as below and restart Klipper.
 
 ## Klipper configuration
 
 ```ini
 [knomi_serial T0_knomi]  # a named device like this, or a bare [knomi_serial]
-serial:  # Path to the serial port for the Knomi_Serial device.
+
+# Use a /dev/serial/by-id/ path, not /dev/ttyUSB0. USB numbering moves between
+# reboots, and with several identical CH340 displays it moves between *them* -
+# so the screens quietly swap tools. `ls /dev/serial/by-id/` to find yours.
+serial: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+
 tool:    # Which tool this screen belongs to, e.g. T0. Optional. It sets the
          # tag the screen shows, and lets KNOMI_TOOL address this screen by
          # tool number as well as by name. `T0`, `t0` and `0` are equivalent.
 
+pages:   # Which pages the idle screen carries, in order, from
+         # tool, gcode, home, move. The screen lands on the first, so this
+         # chooses where you start as well as the sequence. A page that would
+         # be empty is skipped - listing `gcode` with no `gcodes:` below gets
+         # you no G-code page. The emergency stop is always last and is never
+         # listed. Default: tool, gcode, home, move
+         # A toolchanger usually wants: pages: tool, gcode
+
+# The screen shows a pair of accent dots either side of its tool tag when this
+# is the extruder the toolhead currently has mounted - which is how you tell,
+# at a glance across a row of displays, which one the machine is using. That is
+# what heater_hotend does beyond temperature: it is matched against the active
+# extruder's name, so it has to be the real extruder name (extruder, extruder1,
+# ...) rather than any alias.
 heater_hotend: extruder  # Name of the hotend heater.
 heater_bed: heater_bed   # Name of the bed heater.
 
@@ -100,6 +132,31 @@ speed_z: 100
 
 gcodes:  # Comma separated G-Codes to show on the G-code page.
 ```
+
+### More than one screen
+
+One section per display. They find each other and share a single set of timers
+and one computation of the printer state, so a fourth screen costs a serial
+write rather than a fourth pass over the machine:
+
+```ini
+[knomi_serial T0_knomi]
+serial: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+tool: T0
+heater_hotend: extruder
+heater_bed: heater_bed
+pages: tool, gcode
+
+[knomi_serial T1_knomi]
+serial: /dev/serial/by-id/usb-1a86_USB_Serial_1-if00-port0
+tool: T1
+heater_hotend: extruder1
+heater_bed: heater_bed
+pages: tool, gcode
+```
+
+Bed and chamber only need declaring once — whichever section names them, every
+screen shows them, because there is only one bed.
 
 ### Appearance and sleep
 
@@ -175,22 +232,12 @@ KNOMI_TOOL [SCREEN=T0_knomi | TOOL=0] [USED=1] [COLOR=FF8800] [TYPE=PLA]
 <sup>**Multi-screen** — give either `SCREEN=` or `TOOL=`, not both.<br>
 **Single screen** — both are optional; there is nothing to disambiguate.</sup>
 
-The two forms exist because two different callers need different things.
-`SCREEN=` names the object, which is what Klipper does everywhere else, and is
-the only form that reaches a section declaring no `tool:` at all. `TOOL=` is the
-only form a slicer can emit generically — `TOOL={i}` sits in the same loop as
-`filament_colour[i]`, so the macro writes itself, where naming screens means
-writing that mapping out by hand.
-
-`TOOL=` deliberately matches *every* screen declaring it, so a spare display of
-the same tool follows the same spool.
-
-`USED` is what decides whether a screen sleeps. The host is *told* which tools a
-job uses rather than inferring it from nozzle temperature, because temperature
-cannot separate a docked tool still in the job from one that is merely warm from
-the chamber — with ooze prevention dropping a docked tool by 100 °C, and a
-chamber at 60 °C, those two sit close enough together that no threshold splits
-them.
+Both forms exist because two callers need different things. `SCREEN=` names the
+object, the way Klipper does everywhere else, and is the only form that reaches
+a section with no `tool:`. `TOOL=` is the only form a slicer can emit
+generically — `TOOL={i}` sits in the same loop as `filament_colour[i]`, so the
+macro writes itself — and it matches *every* screen declaring that tool, so a
+spare display of one tool follows one spool.
 
 Every parameter is optional, so one fact can be changed without restating the
 others, and the command is safe to repeat. That makes mid-job reassignment
@@ -218,15 +265,17 @@ ending, because the spool is still in the tool.
 
 A screen refuses to sleep while any of these hold:
 
-- its tool is part of the running job (`USED`, above);
-- Klipper has shut down, because a dark screen cannot report a fault;
-- **or its nozzle is hotter than `SLEEP_HOT_THRESHOLD`.**
-
-That last one is a compile-time safety net in **`src/user_conf.h`**, not a
-`printer.cfg` option and not a `KNOMI_TOOL` parameter — a hot nozzle keeps its
-screen lit whatever the host believes. It defaults to 80 °C and has to sit
-**above chamber temperature**, or a tool idling at chamber heat reads as busy
-and the screen never sleeps at all.
+- **`USED` is set and a job is running.** The host is *told* which tools a job
+  uses rather than inferring it from nozzle temperature, because temperature
+  cannot separate a docked tool still in the job from one merely warm from the
+  chamber — with ooze prevention dropping a docked tool by 100 °C and a chamber
+  at 60 °C, no threshold splits those two.
+- **Klipper has shut down**, because a dark screen cannot report a fault.
+- **The nozzle is hotter than `SLEEP_HOT_THRESHOLD`.** A compile-time safety net
+  in `src/user_conf.h` — not a `printer.cfg` option and not a `KNOMI_TOOL`
+  parameter — so a hot nozzle keeps its screen lit whatever the host believes.
+  Defaults to 80 °C, and must sit **above chamber temperature** or a tool idling
+  at chamber heat reads as busy and the screen never sleeps at all.
 
 All three are claims about the machine, so a link that has gone quiet stops
 making them and the normal timers resume.
@@ -257,10 +306,11 @@ and to the Moonraker API as `printer["knomi_serial T0_knomi"]` (or
 | `protocol_match` | Whether the two protocol versions agree. |
 | `device_config_crc` | CRC32 of the config the device is actually running. |
 | `config_applied` | Whether the device is running what was sent. |
-| `build_variant` | `knomi` or `knomi_toolchanger`. |
+| `build_variant` | Which PlatformIO env was flashed. |
 | `sleep_state` | `awake`, `dim`, or `off`. |
 | `screen` | `init`, `idle`, `printing`, or `shutdown`. |
 | `page` | Index of the idle screen page in view. |
+| `page_count` | How many pages the screen built, after empty ones were skipped. |
 | `free_heap` / `min_free_heap` | Current and lowest-ever free heap, bytes. |
 | `device_uptime` | Seconds since the device booted. |
 
@@ -322,10 +372,10 @@ pip install -r requirements-dev.txt
 python tests/test_protocol.py     # firmware and module agree about the wire
 python tests/test_addressing.py   # which screen a KNOMI_TOOL lands on
 ruff check .                      # Python lint
-pio run -e knomi -e knomi_toolchanger
+pio run -e knomi
 ```
 
-All three run in CI on every push and pull request. The protocol test is the one
+All of these run in CI on every push and pull request, as three jobs. The protocol test is the one
 worth having: the firmware's `static_assert`s pin the packet layout, but only
 against other C++, and nothing else compares it against the Python that has to
 produce those bytes. A field added to `struct State` without a matching change
@@ -333,9 +383,9 @@ to `_STATE_FMT` compiles clean, installs clean, and produces a display reading
 every field from the wrong offset. The test reads the constants out of
 `printer.h` and fails if the two sides have drifted.
 
-Both firmware variants are built, because the toolchanger build compiles out two
-pages behind an `#if` and it is entirely possible to break only the build nobody
-ran.
+The addressing test covers rules that read as obvious and are not: a command
+with no target is correct on one machine and ambiguous on the next, and `TOOL=`
+is a one-to-many lookup.
 
 ## Versioning
 

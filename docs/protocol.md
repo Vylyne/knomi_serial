@@ -86,7 +86,7 @@ print time, which is what the stepper is actually being told. The host multiplie
 by 1000 and sends µm/s. Only the mounted tool gets a non-zero value; a docked
 tool shares the toolhead's motion report and none of its filament.
 
-## `CONFIG` — 280 bytes
+## `CONFIG` — 288 bytes
 
 Everything that is true for hours at a time: the macro list, colours, the sleep
 timings, and which corners are soft keys.
@@ -99,7 +99,24 @@ timings, and which corners are soft keys.
 | `uint32`   | `dim_ms`, `sleep_ms` |
 | `uint8`×2  | `brightness`, `dim_brightness` (0–16) |
 | `uint8`    | `key_mask` — corners that are legends: NW 1, NE 2, SW 4, SE 8 |
+| `uint8[8]` | `page_order` — page ids in order, terminated by 0 |
 | `char[256]`| `gcodes`, newline-separated |
+
+`page_order` is why there is one firmware rather than two. A build flag used to
+compile the home and move pages out, which saved 1572 bytes of a 4.7 MB flash
+and cost a second image to build, test and choose between. Off-screen pages are
+neither updated nor drawn, so the real cost of a page you do not want is one
+more swipe past it — a preference, and preferences belong in `printer.cfg`.
+
+    1 tool    2 gcode    3 home    4 move    5 estop
+
+The device appends `estop` whatever the list says, so it is never sent: it was
+inside that build flag once and those builds had no emergency stop at all. A
+page that would be empty is skipped — `gcode` with no macros configured gets no
+G-code page — and an id this firmware has no page for is skipped rather than
+refused, the same way an unknown frame type is. The screen lands on the first
+page built, so ordering picks the landing place too rather than needing a second
+setting that could contradict it.
 
 `key_mask` is how a corner stops being a touch target without losing its symbol.
 A corner with a switch behind it — wired to the device, or bound to a
@@ -130,6 +147,7 @@ an option actually written in `printer.cfg`.
     dim_brightness          bit 5
     gcodes                  bit 6
     key_mask                bit 7
+    page_order              bit 8
 
 ### How it stays in sync
 
@@ -221,7 +239,7 @@ firmware are ignored, and keys missing from older firmware simply stay absent
 from `get_status`. That is what lets the report grow without a protocol bump.
 
 Report keys: `fw` `proto` `var` `sleep` `scr` `page` `cfg` `heap` `minheap` `up`
-`busy` `peak` `psram` `lvfree` `lvfrag` `flush` `fpx` `fus`.
+`pages` `busy` `peak` `psram` `lvfree` `lvfrag` `flush` `fpx` `fus`.
 
 ## Changing any of this
 

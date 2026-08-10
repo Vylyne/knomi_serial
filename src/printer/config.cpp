@@ -52,6 +52,14 @@ void _defaults(Config *c) {
   c->dim_brightness = SLEEP_DIM_BRIGHTNESS;
   c->key_mask = CORNER_LEGEND_KEYS;
   c->_padding[0] = 0;
+
+  const Page defaults[] = DEFAULT_PAGES;
+  memset(c->page_order, 0, sizeof(c->page_order));
+  for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]) &&
+                     i < kMaxPages;
+       i++) {
+    c->page_order[i] = (uint8_t)defaults[i];
+  }
   // Empty until the host says otherwise. The macro list is the host's to know -
   // it comes from printer.cfg - so there is no sensible thing to invent here.
   c->gcodes[0] = '\0';
@@ -142,6 +150,9 @@ bool apply(const void *payload, uint32_t len) {
   }
   if (wire.present & kHasKeyMask) {
     c->key_mask = wire.key_mask;
+  }
+  if (wire.present & kHasPageOrder) {
+    memcpy(c->page_order, wire.page_order, sizeof(c->page_order));
   }
   if (wire.present & kHasGcodes) {
     memcpy(c->gcodes, wire.gcodes, sizeof(c->gcodes));

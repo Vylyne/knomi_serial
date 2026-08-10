@@ -96,21 +96,24 @@
 // a display to ask a host to ask an MCU.
 #define CONFIRM_MS 3000
 
-// Idle screen page order.
+// Idle screen pages, in order, until Page::kNone. The screen lands on the
+// first, so this chooses both the sequence and where you start. The e-stop page
+// is appended whatever this says.
+//
+// This is the compile-time default; `pages:` in printer.cfg overrides it, the
+// same way the colours and timings work. It is a runtime choice because the
+// cost of a page you do not want is one more swipe rather than any measurable
+// resource - see printer::Page.
 //
 // tool_page is temp_page and filament_page merged. They were split along a line
 // the machine does not have: one listed every temperature and could not be
 // touched, the other offered load and unload while saying nothing about what
 // was loaded or whether it was warm enough to move. One page answers both.
-#define IDLE_PAGE_0 gcode_page
-#define IDLE_PAGE_1 tool_page
-#if !defined(TOOLCHANGER) || TOOLCHANGER == 0
-#define IDLE_PAGE_2 home_page
-#define IDLE_PAGE_3 move_page
-#endif
-
-// Index of default idle screen page.
-#define IDLE_PAGE_START 1
+#define DEFAULT_PAGES                                                  \
+  {                                                                    \
+    printer::Page::kTool, printer::Page::kGcode, printer::Page::kHome, \
+        printer::Page::kMove, printer::Page::kNone,                    \
+  }
 
 // ---------------------------------------------------------------------------
 // Colour

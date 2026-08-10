@@ -48,15 +48,12 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
 
-  # Both variants, because the toolchanger build compiles out two pages behind
-  # an #if and it is entirely possible to break only the build nobody ran.
+  # One firmware. There used to be a second env that compiled out two pages,
+  # which meant it was possible to break only the build nobody ran - the reason
+  # this was a matrix. Which pages a screen carries is runtime config now.
   firmware:
-    name: Build ${{ matrix.env }}
+    name: Build firmware
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        env: [knomi, knomi_toolchanger]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,4 +73,4 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
       - run: pip install platformio
-      - run: pio run -e ${{ matrix.env }}
+      - run: pio run -e knomi

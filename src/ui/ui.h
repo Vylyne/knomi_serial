@@ -34,6 +34,14 @@ void refresh();
 const char *screen_name();
 int page_index();
 
+//: How many pages the current screen actually built.
+//:
+//: Which pages exist is a runtime decision now - the configured list, minus any
+//: page that would have been empty - so without this there is no way to tell
+//: from the host whether a `pages:` edit did what was meant, short of picking
+//: the display up and swiping it.
+int page_count();
+
 namespace control {
 
 void register_printer_update_cb(lv_obj_t *obj, printer_update_cb_t cb);

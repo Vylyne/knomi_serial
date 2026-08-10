@@ -126,10 +126,24 @@ def test_config_presence_bits():
         "kHasDimBrightness": k._HAS_DIM_BRIGHTNESS,
         "kHasGcodes": k._HAS_GCODES,
         "kHasKeyMask": k._HAS_KEY_MASK,
+        "kHasPageOrder": k._HAS_PAGE_ORDER,
     }
     check("presence bit count", sorted(bits), sorted(expected))
     for member, value in expected.items():
         check(member, bits[member], value)
+
+
+def test_page_ids():
+    pages = enum_values("Page")
+    check("page count", const("kMaxPages"), k._MAX_PAGES)
+    # kNone terminates the list and kEstop is appended by the device rather than
+    # listed, so neither is a name the host can be asked for.
+    named = {name: value for name, value in pages.items()
+             if name not in ("kNone", "kEstop")}
+    check("page names", sorted(n[1:].lower() for n in named), sorted(k._PAGES))
+    for member, value in named.items():
+        check(member, value, k._PAGES[member[1:].lower()])
+    check("kNone is the terminator", pages["kNone"], 0)
 
 
 def test_key_slot_bits():

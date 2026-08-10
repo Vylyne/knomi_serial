@@ -143,6 +143,10 @@ const char *screen_name() {
   return "unknown";
 }
 
+int page_count() {
+  return _scr ? (int)lv_obj_get_child_count(_scr) : 0;
+}
+
 int page_index() {
   // Asks which page is under the viewport, not where the viewport is. Wrapping
   // reorders the row, so a slot number stopped identifying a page the moment

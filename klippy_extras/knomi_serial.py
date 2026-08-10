@@ -55,7 +55,9 @@ _UNKNOWN = -1
 #:
 #: 3: typed frames. Everything that does not change from tick to tick left the
 #:    state packet - which was most of it. See the note above _STATE_FMT.
-_PROTO_VERSION = 3
+#: 4: config carries the page list, so there is one firmware rather than a
+#:    toolchanger build and a non-toolchanger one.
+_PROTO_VERSION = 4
 
 #: The state frame's payload, field for field against `struct State` in
 #: src/printer/printer.h, down to and including filament_type. `!` means network
@@ -72,9 +74,16 @@ _STATE_FMT = "!I7?B10iI5iI16s"
 _STATE_SIZE = struct.calcsize(_STATE_FMT)
 
 #: The config frame's payload, against `struct Config`. The `x` is its explicit
-#: padding, keeping gcodes on a 4-byte boundary.
-_CONFIG_FMT = "!5I3Bx256s"
+#: padding, keeping the page list and gcodes on 4-byte boundaries.
+_CONFIG_FMT = "!5I3Bx8B256s"
 _CONFIG_SIZE = struct.calcsize(_CONFIG_FMT)
+
+#: Page ids, against `enum class Page`. Order in the list is the order on the
+#: device, and the screen lands on the first of them. `estop` is deliberately
+#: absent: the device appends it whatever the list says, because a build once
+#: compiled it out and had no emergency stop at all.
+_PAGES = {"tool": 1, "gcode": 2, "home": 3, "move": 4}
+_MAX_PAGES = 8
 
 #: Bits of Config.present, against `enum ConfigHas`. A field whose bit is clear
 #: keeps whatever the firmware was built with, so printer.cfg overrides the
@@ -87,6 +96,7 @@ _HAS_BRIGHTNESS = 1 << 4
 _HAS_DIM_BRIGHTNESS = 1 << 5
 _HAS_GCODES = 1 << 6
 _HAS_KEY_MASK = 1 << 7
+_HAS_PAGE_ORDER = 1 << 8
 
 #: Bits of Config.key_mask, against `enum KeySlot`. A corner named here keeps
 #: its symbol as a legend and loses its touch target, because something else
@@ -207,8 +217,15 @@ def config_payload(config):
         config.brightness,
         config.dim_brightness,
         config.key_mask,
+        *_page_bytes(config.pages),
         config.gcodes,
     )
+
+
+def _page_bytes(pages):
+    """A page list as the fixed-width, zero-terminated array the device reads."""
+    out = list(pages)[:_MAX_PAGES]
+    return out + [0] * (_MAX_PAGES - len(out))
 
 
 def encode_message(text):
@@ -314,6 +331,9 @@ class DeviceConfig:
     brightness: int = 0
     dim_brightness: int = 0
     key_mask: int = 0
+
+    #: Page ids in order, from _PAGES. Padded and terminated on the way out.
+    pages: tuple = ()
 
     gcodes: bytes = b""
 
@@ -874,6 +894,28 @@ class Knomi_Serial:
 
         values["key_mask"] = _take(_HAS_KEY_MASK, "hardware_keys", _keys)
 
+        def _pages(raw):
+            # Order is the order on screen, and the display lands on the first,
+            # so this is one setting rather than a list plus a start index that
+            # could disagree with it.
+            order = []
+            for name in str(raw).replace(",", " ").split():
+                page = name.strip().lower()
+                if page not in _PAGES:
+                    raise config.error(
+                        f"{self.name}: pages '{name}' is not one of "
+                        f"{', '.join(_PAGES)}",
+                    ) from None
+                if _PAGES[page] in order:
+                    raise config.error(f"{self.name}: pages lists '{page}' twice")
+                order.append(_PAGES[page])
+            if len(order) > _MAX_PAGES:
+                raise config.error(
+                    f"{self.name}: at most {_MAX_PAGES} pages, got {len(order)}")
+            return tuple(order)
+
+        pages = _take(_HAS_PAGE_ORDER, "pages", _pages)
+
         gcodes = b""
         raw_gcodes = config.get("gcodes", None)
         if raw_gcodes is not None:
@@ -894,6 +936,9 @@ class Knomi_Serial:
         return DeviceConfig(
             present=present,
             gcodes=gcodes,
+            # Kept out of `values` because its empty value is a tuple, not the 0
+            # every other unset field collapses to.
+            pages=pages or (),
             **{key: (0 if value is None else value) for key, value in values.items()},
         )
 
@@ -1156,6 +1201,10 @@ class Knomi_Serial:
             "sleep_state": report.get("sleep"),
             "screen": report.get("scr"),
             "page": _int("page"),
+            # How many pages the screen actually built, which is the configured
+            # list minus any page that would have been empty. Without it a
+            # `pages:` edit can only be checked by picking the display up.
+            "page_count": _int("pages"),
             "free_heap": _int("heap"),
             "min_free_heap": _int("minheap"),
             "device_uptime": _int("up"),

@@ -15,7 +15,9 @@ namespace printer {
 //    from tick to tick left the state packet, which is most of what was in it -
 //    the macro list alone was 256 of its 332 bytes and was resent ten times a
 //    second for the life of the machine. See kFrame below.
-static const unsigned int kProtoVersion = 3;
+// 4: config says which pages a screen has and in what order, so there is one
+//    firmware instead of a toolchanger build and a non-toolchanger one.
+static const unsigned int kProtoVersion = 4;
 
 // Every frame is
 //
@@ -191,7 +193,32 @@ enum ConfigHas : uint32_t {
   kHasDimBrightness  = 1u << 5,
   kHasGcodes         = 1u << 6,
   kHasKeyMask        = 1u << 7,
+  kHasPageOrder      = 1u << 8,
 };
+
+//: The pages an idle screen can carry, as they appear on the wire.
+//:
+//: There used to be a TOOLCHANGER build flag that compiled two of these out.
+//: It saved 1572 bytes of a 4.7MB flash - and cost a second firmware to build,
+//: test, publish and pick between, where flashing the wrong one silently
+//: removed pages with nothing on screen to say why. Since off-screen pages are
+//: neither updated nor drawn, the real cost of an unwanted page is one more
+//: swipe to get past it, which is a preference and belongs in printer.cfg.
+enum class Page : uint8_t {
+  //: Terminates page_order. Never a page.
+  kNone  = 0,
+  kTool  = 1,
+  kGcode = 2,
+  kHome  = 3,
+  kMove  = 4,
+  //: Always last and never listed - it is appended whatever the order says.
+  //: It was inside the old build flag, so toolchanger builds had no emergency
+  //: stop at all, and that is not a mistake worth leaving available.
+  kEstop = 5,
+};
+
+//: Longest page_order, terminator included.
+static const unsigned int kMaxPages = 8;
 
 //: Bits of Config.key_mask - the corners that are legends rather than soft
 //: keys, because something else already reports the press.
@@ -228,13 +255,22 @@ struct Config {
 
   uint8_t _padding[1];
 
+  //: Which pages the idle screen carries, in order, terminated by kNone. The
+  //: screen lands on the first of them, so ordering chooses both the sequence
+  //: and where you start.
+  //:
+  //: A page with nothing in it is skipped whatever this says - listing `gcode`
+  //: with no macros configured gets you no G-code page, because a page that
+  //: can only be empty is worse than one that is absent.
+  uint8_t page_order[kMaxPages];
+
   //: Newline-separated macro names for the gcode page. 256 bytes, and the
   //: reason proto 2 spent three quarters of its bandwidth restating a list
   //: that had not changed since Klipper started.
   char gcodes[kGcodesMaxLen + 1];
 };
 
-static const unsigned int kConfigWireSize = 280;
+static const unsigned int kConfigWireSize = 288;
 static_assert(
     sizeof(Config) == kConfigWireSize,
     "Config layout changed: update _CONFIG_FMT and kProtoVersion");

@@ -139,8 +139,9 @@ refused, the same way an unknown frame type is. The screen lands on the first
 page built, so ordering picks the landing place too rather than needing a second
 setting that could contradict it.
 
-`readouts` is which secondary temperatures a screen shows beside its hotend,
-in the order given.
+`readouts` is which secondary temperatures a screen shows above its hotend, in
+the order given, each in its own scrim - two short numbers under one wide pill
+is mostly dead dark space and reads as a bar rather than as two readings.
 
     1 bed    2 chamber    3 mcu
 

@@ -1,14 +1,15 @@
 #ifndef READOUTS_H
 #define READOUTS_H
 
-#include <stddef.h>
+#include <lvgl.h>
 
 #include "printer/printer.h"
 
 namespace ui {
 namespace readouts {
 
-// The secondary temperatures, formatted the same way wherever they appear.
+// The secondary temperatures, as a centred row of independently scrimmed
+// labels.
 //
 // Which ones show is `readouts:` in printer.cfg rather than a fixed pair. Four
 // tool screens each restating the one bed temperature is four copies of
@@ -16,19 +17,39 @@ namespace readouts {
 // that tool can give. Neither is the right default for the other machine, so
 // neither is hardcoded.
 //
-// Shared between the tool page and the printing page so the two cannot drift
-// into formatting the same numbers differently.
+// A scrim each rather than one behind the lot. Two short numbers with a gap
+// between them under a single pill is mostly dead dark space, and it reads as a
+// bar rather than as two readings.
+//
+// Shared by the tool page and the printing page so the two cannot drift into
+// rendering the same numbers differently.
 
-//: Write the configured readouts into `out`, e.g. "BED 100/100   CHM 50".
-//: Always NUL-terminates, including when nothing is configured or nothing
-//: configured is present - an empty line is the correct output then, and it
-//: must be an empty *string* rather than an untouched buffer.
-void format(char *out, size_t n, const printer::State &state);
+struct Row {
+  lv_obj_t *scrim[printer::kMaxReadouts];
+  lv_obj_t *label[printer::kMaxReadouts];
+  //: Which Readout each slot shows, so update() knows what to put in it.
+  uint8_t id[printer::kMaxReadouts];
+  int count;
+  //: False when the row would not fit with targets and dropped them. Set for
+  //: the whole row rather than per pill, so they stay a matching set.
+  bool targets;
+};
 
-//: The widest string format() could produce for the current config, for sizing
-//: a scrim once instead of re-measuring as the digits change. Three-digit
-//: values throughout, so nothing moves when a temperature crosses 99.
-void widest(char *out, size_t n);
+//: Build the configured readouts as a row centred at `y`.
+//:
+//: Each pill is sized once, to the widest its reading can ever be - three
+//: digits, and as though it had a target whether or not it does. A sensor that
+//: appears mid-print, or a fan that gains a setpoint, then resizes nothing and
+//: moves nothing beside it.
+//:
+//: `scrimmed` is for pages with something rising behind them. The tool page has
+//: only the heat haze, which these sit near the dark top of, so a pill there
+//: would be chrome for the sake of it.
+void build(Row *row, lv_obj_t *parent, int32_t y, bool scrimmed);
+
+//: Put the current values in. A reading the machine does not report hides its
+//: whole pill rather than showing a zero.
+void update(Row *row, const printer::State &state);
 
 }
 }

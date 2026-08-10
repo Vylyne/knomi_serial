@@ -16,7 +16,7 @@ namespace tool_page {
 static lv_obj_t *_tag = nullptr;
 static lv_obj_t *_dot_l = nullptr;
 static lv_obj_t *_dot_r = nullptr;
-static lv_obj_t *_aux = nullptr;
+static readouts::Row _aux;
 static lv_obj_t *_hero = nullptr;
 static lv_obj_t *_target = nullptr;
 static lv_obj_t *_pool = nullptr;
@@ -96,12 +96,11 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   _dot_r = _init_dot(page);
 
   // The rest of the machine, quiet and in one line. This tool's own heat is the
-  // hero below; the bed and chamber are context for it.
-  _aux = lv_label_create(page);
-  lv_obj_set_style_text_font(_aux, &lv_font_montserrat_14, LV_PART_MAIN);
-  lv_obj_set_style_text_color(_aux, lv_color_white(), LV_PART_MAIN);
-  lv_obj_set_style_text_opa(_aux, LV_OPA_50, LV_PART_MAIN);
-  lv_obj_align(_aux, LV_ALIGN_TOP_MID, 0, 56);
+  // hero below; whatever `readouts:` names is context for it.
+  //
+  // Unscrimmed: nothing rises behind this page, and these sit near the dark top
+  // of the heat haze, so a pill each would be chrome for its own sake.
+  readouts::build(&_aux, page, READOUT_Y, false);
 
   // The hotend, carrying the heat ramp. No scrim: nothing rises behind this
   // page, so the ground under the numeral is always black and the ink can be
@@ -110,13 +109,13 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   lv_obj_set_style_text_font(_hero, &lv_font_montserrat_48, LV_PART_MAIN);
   lv_obj_align(_hero, LV_ALIGN_CENTER, 0, -12);
 
-  // Hung off the right of the hero, baseline aligned, rather than centred
-  // under it. Aligning to the hero means the hero itself never moves for it -
-  // the big number is what the eye anchors on, and centring the pair would
-  // slide it sideways every time a heater was set or cleared.
+  // Under the hero rather than beside it. Beside reads as a fraction and
+  // crowds the numeral; under it the two are plainly one reading, and there is
+  // nothing rising behind this page to make the vertical room precious.
   _target = lv_label_create(page);
   lv_obj_set_style_text_font(_target, &lv_font_montserrat_16, LV_PART_MAIN);
   lv_obj_set_style_text_opa(_target, TARGET_OPA, LV_PART_MAIN);
+  lv_obj_align(_target, LV_ALIGN_CENTER, 0, 30);
 
   // The fill at rest. On the printing page this rectangle rises with progress;
   // here it sits at the bottom as a shallow pool of whatever is loaded, so the
@@ -219,10 +218,6 @@ void printer_update(const printer::State &state) {
     lv_label_set_text_fmt(_hero, "%d", (int)_hot);
     lv_obj_set_style_text_color(
         _hero, theme::heat_ink(_hot, _hot_target), LV_PART_MAIN);
-    // Re-anchored here because the hero's width changes with its digits, and
-    // the target rides its right edge.
-    lv_obj_align_to(_target, _hero, LV_ALIGN_OUT_RIGHT_BOTTOM, TARGET_GAP,
-                    -TARGET_LIFT);
 
     if (_hot_target > 0) {
       lv_label_set_text_fmt(_target, "/ %d", (int)_hot_target);
@@ -252,9 +247,7 @@ void printer_update(const printer::State &state) {
     // configured takes neither branch below and this would otherwise be handed
     // to the label as raw stack - read until it happened to find a zero. Every
     // printer I tested against had a bed, which is exactly why it survived.
-    char line[64];
-    readouts::format(line, sizeof(line), state);
-    lv_label_set_text(_aux, line);
+    readouts::update(&_aux, state);
   }
 
   if (state.filament_color != _color) {

@@ -186,9 +186,10 @@ estop_at:        # Which side of the page row the emergency stop hangs off,
                  # bottom or top. Bottom means swipe up to reach it, top means
                  # pull down. Default bottom.
 
-readouts:        # Which secondary temperatures show beside the hotend, in
-                 # order, from bed, chamber, mcu. One that the machine does not
-                 # have is skipped, so listing it costs nothing.
+readouts:        # Which secondary temperatures show above the hotend, in
+                 # order, from bed, chamber, mcu. Each gets its own pill. One
+                 # the machine does not have is skipped, so listing it costs
+                 # nothing.
                  # Default: bed, chamber
                  # A toolchanger usually wants: readouts: mcu
                  # - the bed is the same on every screen, while the tool's own

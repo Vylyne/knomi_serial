@@ -22,7 +22,7 @@ static lv_obj_t *_fill = nullptr;
 static lv_obj_t *_wave = nullptr;
 static lv_timer_t *_wave_timer = nullptr;
 static lv_obj_t *_pct = nullptr;
-static lv_obj_t *_target = nullptr;
+static readouts::Row _aux;
 
 //: The strip of glass the surface moves through, painted directly.
 //:
@@ -76,31 +76,7 @@ static int32_t _sub_hot = INT32_MIN;
 static int32_t _sub_target = INT32_MIN;
 static int32_t _tool_shown = INT32_MIN;
 static int8_t _dots_shown = -1;
-static int32_t _r_bed = INT32_MIN;
-static int32_t _r_bed_t = INT32_MIN;
-static int32_t _r_cham = INT32_MIN;
-static int32_t _r_cham_t = INT32_MIN;
-static int32_t _r_mcu = INT32_MIN;
-static int32_t _r_mcu_t = INT32_MIN;
-
-//: True when any readout this page might show has moved. Compares all of them
-//: rather than only the configured ones - it is six integers, and asking which
-//: are configured costs more than checking the two that are not.
-static bool _readouts_dirty(const printer::State &state) {
-  if (state.bed_temp == _r_bed && state.bed_target == _r_bed_t &&
-      state.chamber_temp == _r_cham && state.chamber_target == _r_cham_t &&
-      state.mcu_temp == _r_mcu && state.mcu_target == _r_mcu_t) {
-    return false;
-  }
-  _r_bed = state.bed_temp;
-  _r_bed_t = state.bed_target;
-  _r_cham = state.chamber_temp;
-  _r_cham_t = state.chamber_target;
-  _r_mcu = state.mcu_temp;
-  _r_mcu_t = state.mcu_target;
-  return true;
-}
-
+static int32_t _sub_shown = INT32_MIN;
 //: Remembers the material the sub-line scrim was last sized for, so it is
 //: measured again when the spool changes rather than on every packet.
 //:
@@ -210,12 +186,7 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   _sub_target = INT32_MIN;
   _tool_shown = INT32_MIN;
   _dots_shown = -1;
-  _r_bed = INT32_MIN;
-  _r_bed_t = INT32_MIN;
-  _r_cham = INT32_MIN;
-  _r_cham_t = INT32_MIN;
-  _r_mcu = INT32_MIN;
-  _r_mcu_t = INT32_MIN;
+  _sub_shown = INT32_MIN;
 
   // Deleted with the page. Not lv_timer_set_repeat_count - that makes LVGL
   // delete the timer itself and leaves this pointer dangling, which is a
@@ -248,6 +219,11 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   _dot_l = _init_dot(page);
   _dot_r = _init_dot(page);
 
+  // Same place as the tool page's, so the two read as one machine at two
+  // moments. Scrimmed here because the fill reaches this high past about 77%
+  // and these would otherwise end up on the filament colour.
+  readouts::build(&_aux, page, READOUT_Y, true);
+
   // The hotend, not the percentage. Progress is already the fill rising behind
   // all of this, so a numeral saying the same thing spent the largest element
   // on the screen restating it - and on a toolchanger it restated a property of
@@ -258,11 +234,6 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   lv_obj_set_style_text_font(_pct, &lv_font_montserrat_48, LV_PART_MAIN);
   lv_obj_align(_pct, LV_ALIGN_CENTER, 0, -6);
 
-  // Hung off the hero's right edge rather than centred with it, so the hero
-  // never moves for it. See tool_page.
-  _target = lv_label_create(page);
-  lv_obj_set_style_text_font(_target, &lv_font_montserrat_16, LV_PART_MAIN);
-  lv_obj_set_style_text_opa(_target, TARGET_OPA, LV_PART_MAIN);
 
   _scrim_sub = _init_scrim(page);
   _sub = lv_label_create(page);
@@ -283,22 +254,7 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   // tool scrim is always sized as though the active dots were showing - a
   // slightly generous pill on an idle tool costs nothing, while resizing when a
   // tool takes over would be one more thing moving on screen.
-  // Wide enough for the hero *and* the target hanging off its right, and
-  // shifted right by half of what that adds so the pill is centred on the pair
-  // while the hero itself stays centred on the glass. Without this the target
-  // sat outside the scrim, 50% white directly on the rising fill - which is the
-  // one thing the scrims exist to prevent.
-  {
-    lv_point_t hero, tail;
-    lv_text_get_size(&hero, "888", &lv_font_montserrat_48, 0, 0, LV_COORD_MAX,
-                     LV_TEXT_FLAG_NONE);
-    lv_text_get_size(&tail, "/ 888", &lv_font_montserrat_16, 0, 0, LV_COORD_MAX,
-                     LV_TEXT_FLAG_NONE);
-    int32_t extra = TARGET_GAP + tail.x;
-    lv_obj_set_size(_scrim_pct, hero.x + extra + 14 * 2, hero.y + 4 * 2);
-    lv_obj_set_style_radius(_scrim_pct, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_align(_scrim_pct, LV_ALIGN_CENTER, extra / 2, -6);
-  }
+  _size_scrim(_scrim_pct, &lv_font_montserrat_48, "888", 14, 4, LV_ALIGN_CENTER, 0, -6);
   _size_scrim(_scrim_tool, &lv_font_montserrat_16, "T00", 26, 4, LV_ALIGN_TOP_MID, 0, 30);
 
   // The sub-line scrim is sized from the material, so it is the one printer_update
@@ -627,34 +583,30 @@ void printer_update(const printer::State &state) {
     _sub_target = state.hotend_target;
 
     lv_label_set_text_fmt(_pct, "%d", (int)_sub_hot);
-    lv_color_t ink = _sub_target > 0
-                         ? theme::heat_ink(_sub_hot, _sub_target)
-                         : lv_color_white();
-    lv_obj_set_style_text_color(_pct, ink, LV_PART_MAIN);
-
-    if (_sub_target > 0) {
-      lv_label_set_text_fmt(_target, "/ %d", (int)_sub_target);
-      lv_obj_set_style_text_color(_target, ink, LV_PART_MAIN);
-      lv_obj_remove_flag(_target, LV_OBJ_FLAG_HIDDEN);
-    } else {
-      lv_obj_add_flag(_target, LV_OBJ_FLAG_HIDDEN);
-    }
-    // Re-anchored with the hero, whose width moves with its digits.
-    lv_obj_align_to(_target, _pct, LV_ALIGN_OUT_RIGHT_BOTTOM, TARGET_GAP,
-                    -TARGET_LIFT);
+    lv_obj_set_style_text_color(
+        _pct,
+        _sub_target > 0 ? theme::heat_ink(_sub_hot, _sub_target)
+                        : lv_color_white(),
+        LV_PART_MAIN);
   }
 
-  // Material and the configured readouts, on one line under the hero.
-  if (_readouts_dirty(state) ||
+  readouts::update(&_aux, state);
+
+  // Material and the target, under the hero. The hero is what the hotend is,
+  // so the sub-line is what it is being asked to be - the pair that used to sit
+  // one above the other, now split so the big number stands alone.
+  if (state.hotend_target != _sub_shown ||
       strncmp(_sized_for, state.filament_type, sizeof(_sized_for) - 1) != 0) {
-    char aux[64];
-    readouts::format(aux, sizeof(aux), state);
-    if (state.filament_type[0] != '\0' && aux[0] != '\0') {
-      lv_label_set_text_fmt(_sub, "%s   %s", state.filament_type, aux);
+    _sub_shown = state.hotend_target;
+    if (state.filament_type[0] != '\0' && _sub_shown > 0) {
+      lv_label_set_text_fmt(_sub, "%s   / %d", state.filament_type,
+                            (int)_sub_shown);
     } else if (state.filament_type[0] != '\0') {
       lv_label_set_text(_sub, state.filament_type);
+    } else if (_sub_shown > 0) {
+      lv_label_set_text_fmt(_sub, "/ %d", (int)_sub_shown);
     } else {
-      lv_label_set_text(_sub, aux);
+      lv_label_set_text(_sub, "");
     }
   }
 
@@ -698,16 +650,11 @@ void printer_update(const printer::State &state) {
     strncpy(_sized_for, state.filament_type, sizeof(_sized_for) - 1);
     _sized_for[sizeof(_sized_for) - 1] = '\0';
 
-    char aux[64];
-    readouts::widest(aux, sizeof(aux));
-
-    char widest[printer::kFilamentTypeMaxLen + 68];
-    if (_sized_for[0] != '\0' && aux[0] != '\0') {
-      snprintf(widest, sizeof(widest), "%s   %s", _sized_for, aux);
-    } else if (_sized_for[0] != '\0') {
-      snprintf(widest, sizeof(widest), "%s", _sized_for);
+    char widest[printer::kFilamentTypeMaxLen + 12];
+    if (_sized_for[0] != '\0') {
+      snprintf(widest, sizeof(widest), "%s   / 888", _sized_for);
     } else {
-      snprintf(widest, sizeof(widest), "%s", aux);
+      snprintf(widest, sizeof(widest), "/ 888");
     }
     _size_scrim(_scrim_sub, &lv_font_montserrat_18, widest, 12, 3, LV_ALIGN_CENTER, 0, 48);
   }

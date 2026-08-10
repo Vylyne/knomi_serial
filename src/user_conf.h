@@ -144,8 +144,10 @@
 // eye anchors on, and centring the pair would slide it sideways every time a
 // heater was set or cleared.
 #define TARGET_OPA LV_OPA_50
-#define TARGET_GAP 4
-#define TARGET_LIFT 9
+
+// Where the readout line sits under the tool tag. The same on both pages, so
+// the two read as one machine at two moments rather than two layouts.
+#define READOUT_Y 58
 
 // ---------------------------------------------------------------------------
 // Colour

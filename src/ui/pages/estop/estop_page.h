@@ -20,16 +20,12 @@ namespace estop_page {
 // is slower precisely when slowness costs, and the second tap is the smallest
 // guard that still stops a brush against the glass from firing it.
 //
-// Replaces the STOP button that used to ride the overlay on every screen, one
-// stray touch away at all times. That overlay was deliberately dropped from the
-// toolchanger build - an emergency stop present on every screen of every
-// display is not a safety feature, it is four more surfaces to catch a sleeve
-// on. The gap that left was accidental rather than intended: nothing replaced
-// it, so those builds ended up with no software stop at all.
-//
-// A page answers the original objection without leaving the gap. It is not
-// underfoot, because you have to swipe to it; and swiping to it is deliberate
-// without being slow.
+// A page rather than an overlay. This began as a STOP button riding an overlay
+// on every screen, which is the wrong shape for it twice over: underfoot
+// enough to catch a sleeve on - four times over, on a toolchanger - and, being
+// permanent chrome, taking room from whatever the screen was actually for.
+// Swiping to a page is deliberate without being slow, which is the trade this
+// control wants.
 //
 // None of this is a substitute for a real one. A stop that travels display to
 // serial to host to MCU is a convenience that happens to be red; the machine's

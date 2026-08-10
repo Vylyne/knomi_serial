@@ -94,14 +94,10 @@ namespace ui
         _updates[_update_count++] = page->update;
       }
 
-      // Last page on every screen, and never in the order.
-      //
-      // The emergency stop used to ride an overlay, one stray touch away on
-      // every screen, and that overlay was deliberately dropped from the
-      // toolchanger build for good reason - see estop_page.h. Nothing replaced
-      // it there, which is the part that was not intended. Appending it here
-      // rather than taking it from the list means the same omission cannot
-      // happen twice by a different route.
+      // Last page on every screen, and never in the order - the printing
+      // screen appends it the same way. Not in `pages:` because a list written
+      // while thinking about idle pages would drop it without meaning to, and
+      // this is not the setting to learn that from.
       estop_page::init(scr, state);
       _updates[_update_count++] = estop_page::printer_update;
 

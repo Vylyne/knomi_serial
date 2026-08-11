@@ -14,9 +14,11 @@ import enum
 import logging
 import os
 import struct
+import time
 import zlib
 
 import serial
+import serial.tools.list_ports
 
 _BAUD_RATE = 115200
 _HEADER = b"\x83\xad\x83\xad"
@@ -145,6 +147,111 @@ _UNSET = object()
 #: Print states in which a job is underway. Leaving this set is what clears the
 #: per-tool `used` flags.
 _ACTIVE_PRINT_STATES = ("printing", "paused")
+
+
+#: USB vendor ids worth listening to. 1A86 is the CH340 on the Knomi V2; 303A is
+#: Espressif's own, for boards whose ESP32 is the USB device directly.
+_USB_VENDORS = (0x1A86, 0x303A)
+
+#: How long to listen on a candidate port. The device announces itself every two
+#: seconds unprompted, so this is not a timeout on a question - it is a wait for
+#: the next broadcast. Six seconds covers the worst case where opening the port
+#: resets the board: about two to boot, then up to one full report period.
+_DISCOVER_LISTEN = 6.0
+
+
+def candidate_ports(skip=()):
+    """Serial ports that could be a display."""
+    return sorted(
+        port.device
+        for port in serial.tools.list_ports.comports()
+        if port.vid in _USB_VENDORS and port.device not in skip
+    )
+
+
+def discover(ports=None, listen=_DISCOVER_LISTEN, skip=()):
+    """Map hardware id to port, by listening rather than asking.
+
+    Every display broadcasts a report line every two seconds without being
+    prompted, so discovery needs no request, no protocol of its own, and no
+    cooperation from a device that might be busy. Open, listen, read `id`,
+    close.
+
+    Every candidate is opened at once and polled together. Six displays take six
+    seconds that way and thirty-six one at a time, which is the difference
+    between a slow Klipper start and an unacceptable one.
+
+    Shared with scripts/discover.py rather than reimplemented there, so what the
+    tool tells you to put in printer.cfg is what Klipper will look for.
+    """
+    if ports is None:
+        ports = candidate_ports(skip)
+
+    live = {}
+    for path in ports:
+        try:
+            live[path] = serial.Serial(path, _BAUD_RATE, timeout=0)
+        except (serial.SerialException, OSError) as e:
+            # Held by another section, or gone since it was enumerated. Neither
+            # is worth stopping for - the rest of the row is still findable.
+            logging.info(f"knomi_serial: discovery skipped {path}: {e}")
+
+    found = {}
+    buffers = {path: b"" for path in live}
+    deadline = time.time() + listen
+    try:
+        while live and time.time() < deadline:
+            for path, port in list(live.items()):
+                try:
+                    waiting = port.in_waiting
+                except (serial.SerialException, OSError):
+                    del live[path]
+                    continue
+                if not waiting:
+                    continue
+                buffers[path] += port.read(waiting)
+                while b"\n" in buffers[path]:
+                    line, _, buffers[path] = buffers[path].partition(b"\n")
+                    ident = report_id(line.strip())
+                    if ident:
+                        found[ident] = path
+                        # Closed here, not left to the loop below - this one is
+                        # about to be handed to a section that will open it, and
+                        # discovery must not still be holding it when that
+                        # happens.
+                        del live[path]
+                        try:
+                            port.close()
+                        except Exception:
+                            pass
+                        break
+            time.sleep(0.02)
+    finally:
+        for port in live.values():
+            try:
+                port.close()
+            except Exception:
+                pass
+    return found
+
+
+def _int_or_none(text):
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def report_id(line):
+    """The `id` field of a report line, or None if this is not one."""
+    if not line.startswith(_CMD_PREFIX + _CMD_REPORT):
+        return None
+    body = line[len(_CMD_PREFIX) + len(_CMD_REPORT):]
+    for item in body.decode("utf-8", "replace").split(";"):
+        key, sep, value = item.partition("=")
+        if sep and key.strip() == "id":
+            return value.strip() or None
+    return None
 
 
 def _module_version():
@@ -402,6 +509,10 @@ class KnomiCluster:
         self.reactor = printer.get_reactor()
         self.devices = []
         self.tools = {}
+        #: Hardware id to port, from the last discovery pass, and when the next
+        #: one is allowed. Empty until a device_id: section asks for one.
+        self._ports = {}
+        self._discover_after = 0
 
         self.gcode = printer.lookup_object("gcode")
         self.heaters = None
@@ -424,6 +535,47 @@ class KnomiCluster:
 
     def register(self, device):
         self.devices.append(device)
+
+    def resolve_port(self, device_id):
+        """Which port a hardware id is on, discovering if we do not know.
+
+        Here rather than on the device because discovery must happen once for
+        the whole row: six sections each opening every port would fight over
+        them, and a port being probed by one section looks broken to another.
+
+        Rate limited to the reconnect cadence. A display plugged in after
+        Klipper started, or moved to another socket, is found on the next pass
+        rather than needing a restart - which is the point of naming the device
+        instead of the socket.
+        """
+        if device_id in self._ports:
+            return self._ports[device_id]
+
+        now = self.reactor.monotonic()
+        if now < self._discover_after:
+            return None
+        self._discover_after = now + _RECONNECT_PERIOD
+
+        # Never touch a port a section has been told to use by name. Opening it
+        # to ask who is there would interrupt a display that is already working
+        # perfectly well.
+        claimed = tuple(d.config_serial for d in self.devices if d.config_serial)
+        try:
+            self._ports = discover(skip=claimed)
+        except Exception as e:
+            logging.warning(f"knomi_serial: discovery failed: {e}")
+            return None
+
+        wanted = {d.config_device_id for d in self.devices if d.config_device_id}
+        missing = sorted(wanted - set(self._ports))
+        if missing:
+            logging.info(
+                "knomi_serial: no display answered for %s (found: %s)",
+                ", ".join(missing),
+                ", ".join(f"{i} on {p}" for i, p in sorted(self._ports.items()))
+                or "none",
+            )
+        return self._ports.get(device_id)
 
     def tool_state(self, screen):
         """The filament record for one screen, created on first use.
@@ -677,6 +829,15 @@ class KnomiCluster:
                 state.type = filament_type
 
     def get_status(self, eventtime):
+        # `devices` is the whole row in one place, so a firmware updater can ask
+        # one object what is out there instead of parsing printer.cfg for
+        # `serial:` lines - which would no longer answer the question anyway,
+        # since a display addressed by identity has no path in its section and
+        # the path it happens to be on today is discovered, not configured.
+        #
+        # Keyed by section name because that is what a person recognises and
+        # what KNOMI_TOOL already addresses. The hardware id is in the value: it
+        # is the thing that stays true when the cable moves.
         return {
             "screens": {
                 screen: {
@@ -685,6 +846,10 @@ class KnomiCluster:
                     "filament_type": state.type or None,
                 }
                 for screen, state in self.tools.items()
+            },
+            "devices": {
+                device.screen_name: device.identity()
+                for device in self.devices
             },
         }
 
@@ -716,7 +881,30 @@ class Knomi_Serial:
         #: ten times a second for as long as the printer stays down.
         self.last_message = None
 
-        self.config_serial = config.get("serial")
+        # A path names a socket, not a display. The CH340 carries no USB serial
+        # number, so /dev/ttyUSB0 moves on reboot, a by-id path for a second
+        # identical unit is disambiguated by the kernel rather than the device,
+        # and a udev rule on KERNELS== is stable only until a cable moves. On a
+        # toolchanger that last one is the quiet failure: swap two leads and two
+        # screens describe the wrong tool with nothing on the glass to say so.
+        #
+        # `device_id:` names the display itself, by the id burned into its chip.
+        # Either is accepted; both together is refused, because two ways to
+        # address one thing - one of which could be wrong - is the trap that
+        # `hardware_keys` and the SCREEN=/TOOL= pair both avoid.
+        self.config_serial = config.get("serial", None)
+        self.config_device_id = config.get("device_id", None)
+        if self.config_device_id is not None:
+            self.config_device_id = self.config_device_id.strip().upper()
+        if bool(self.config_serial) == bool(self.config_device_id):
+            raise config.error(
+                f"{self.name}: give exactly one of serial: or device_id:. "
+                "Run scripts/discover.py to see which id is on which port, or "
+                "read it off the waiting screen."
+            )
+        #: Where device_id: resolved to, once discovery has found it.
+        self.resolved_port = None
+
         self.config_tool = _normalize_tool(config.get("tool", None))
 
         self.config_hotend = config.get("heater_hotend", None)
@@ -957,19 +1145,39 @@ class Knomi_Serial:
     # ------------------------------------------------------------------
 
     def _handle_connect(self):
-        self._connect()
+        # A section with device_id: has nothing to open yet - discovery has to
+        # listen for a couple of seconds first, and that cannot happen on the
+        # reactor thread during connect. It comes up on the retry cadence a
+        # moment later instead.
+        if self.config_serial:
+            self._connect()
+
+    def _port(self):
+        """The path to open, or None if identity has not resolved to one yet."""
+        if self.config_serial:
+            return self.config_serial
+        if self.resolved_port is None:
+            self.resolved_port = self.cluster.resolve_port(self.config_device_id)
+        return self.resolved_port
 
     def _connect(self):
+        path = self._port()
+        if not path:
+            return False
         try:
             self.serial = serial.Serial(
-                self.config_serial,
+                path,
                 _BAUD_RATE,
                 write_timeout=_WRITE_TIMEOUT,
             )
             return True
         except serial.SerialException as e:
-            logging.warning(f"{self.name}: Failed to connect: {e}")
+            logging.warning(f"{self.name}: Failed to connect on {path}: {e}")
             self.serial = None
+            # The display may have been unplugged and put back on another
+            # socket. Forget where it was so the next attempt looks again -
+            # which is the whole point of addressing it by identity.
+            self.resolved_port = None
             return False
 
     def _drop(self, reason):
@@ -1150,6 +1358,31 @@ class Knomi_Serial:
             )
             self.warned_proto = proto
 
+    def identity(self):
+        """What this section is, for the cluster's device map.
+
+        Everything a firmware updater needs and nothing that changes minute to
+        minute: which display, where it is, what is on it. Deliberately not the
+        heap and uptime figures - those belong in this section's own
+        get_status, and an updater polling the whole row does not want them.
+        """
+        report = self.device_report
+        age = None
+        if self.device_report_time is not None:
+            age = self.reactor.monotonic() - self.device_report_time
+        return {
+            # Burned into the chip, so it is the same after a reflash, an
+            # erase_flash, and a cable moved to another socket.
+            "device_id": report.get("id") or self.config_device_id,
+            "port": self.config_serial or self.resolved_port,
+            "addressed_by": "serial" if self.config_serial else "device_id",
+            "build_variant": report.get("var"),
+            "firmware_version": report.get("fw"),
+            "protocol_version": _int_or_none(report.get("proto")),
+            "online": age is not None and age < _DEVICE_TIMEOUT,
+            "tool": self.config_tool,
+        }
+
     def get_status(self, eventtime):
         report = self.device_report
         age = None
@@ -1176,7 +1409,9 @@ class Knomi_Serial:
         return {
             # Host side.
             "connected": self.serial is not None and self.serial.is_open,
-            "port": self.config_serial,
+            "port": self.config_serial or self.resolved_port,
+            "device_id": self.config_device_id,
+            "reported_id": report.get("id"),
             "module_version": self.module_version,
             "protocol_version": _PROTO_VERSION,
             "config_crc": f"{self.config_crc:08X}",

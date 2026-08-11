@@ -1,5 +1,6 @@
 #include "init_screen.h"
 
+#include "printer/identity.h"
 #include "ui/theme.h"
 #include "ui/ui.h"
 #include "user_conf.h"
@@ -44,6 +45,16 @@ namespace ui
       name = lv_label_create(scr);
       lv_label_set_text(name, PRINTER_NAME);
       lv_obj_align(name, LV_ALIGN_TOP_MID, 0, 18);
+
+      // The hardware id, under the name. This is the half of identity-based
+      // addressing that makes setting it up possible: plug in six displays with
+      // no config at all, walk down the row, and read six codes off the glass.
+      // Nothing else on the machine can tell you which physical unit is which.
+      lv_obj_t *ident = lv_label_create(scr);
+      lv_label_set_text(ident, printer::identity::id());
+      lv_obj_set_style_text_font(ident, &lv_font_montserrat_12, LV_PART_MAIN);
+      lv_obj_set_style_text_opa(ident, LV_OPA_50, LV_PART_MAIN);
+      lv_obj_align(ident, LV_ALIGN_TOP_MID, 0, IDENT_Y);
 
       // An arc turned by hand rather than lv_spinner, in the machine's own
       // colour - which is why config is loaded from flash before any of this

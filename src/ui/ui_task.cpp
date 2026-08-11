@@ -8,6 +8,7 @@
 #include "display/display.h"
 #include "display/cst816s.h"
 #include "printer/config.h"
+#include "printer/identity.h"
 #include "printer/printer.h"
 #include "printer/recv/recv_state.h"
 #include "printer/recv/recv_task.h"
@@ -298,7 +299,7 @@ namespace ui
     snprintf(
         fields,
         sizeof(fields),
-        "fw=%s;proto=%u;var=%s;sleep=%s;scr=%s;page=%d;pages=%d;"
+        "id=%s;fw=%s;proto=%u;var=%s;sleep=%s;scr=%s;page=%d;pages=%d;"
         // Where both scrollers actually are. "which page" cannot tell a
         // horizontal swipe that did nothing from a vertical one that worked -
         // neither moves the page index.
@@ -314,6 +315,7 @@ namespace ui
         // is actually there.
         "busy=%u;peak=%u;psram=%u;lvfree=%u;lvfrag=%u;"
         "flush=%u;fpx=%u;fus=%u",
+        printer::identity::id(),
         KNOMI_FW_VERSION,
         printer::kProtoVersion,
         KNOMI_BUILD_VARIANT,

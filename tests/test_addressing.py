@@ -145,6 +145,62 @@ def test_ending_a_print_clears_used_everywhere():
         check(f"{name} used", c.tool_state(name).used, True)
 
 
+def device_map(**kw):
+    """A device with just the fields the cluster's `devices` map reads."""
+    d = k.Knomi_Serial.__new__(k.Knomi_Serial)
+    d.screen_name = kw.get("screen_name", "T0_knomi")
+    d.config_serial = kw.get("config_serial")
+    d.config_device_id = kw.get("config_device_id")
+    d.config_tool = kw.get("config_tool", "0")
+    d.resolved_port = kw.get("resolved_port")
+    d.device_report = kw.get("report", {})
+    d.device_report_time = kw.get("seen")
+    d.reactor = type("R", (), {"monotonic": staticmethod(lambda: 100.0)})()
+    return d
+
+
+REPORT = {"id": "19AA44", "fw": "0.5.0", "proto": "5", "var": "knomi"}
+
+
+def test_device_map_names_the_hardware_not_the_socket():
+    """What mcu-updater reads instead of parsing `serial:` out of printer.cfg."""
+    c = cluster(device_map(config_device_id="19AA44", resolved_port="/dev/ttyUSB3",
+                           report=REPORT, seen=99.0))
+    got = c.get_status(0.0)["devices"]["T0_knomi"]
+    check("id", got["device_id"], "19AA44")
+    check("resolved port", got["port"], "/dev/ttyUSB3")
+    check("env", got["build_variant"], "knomi")
+    check("firmware", got["firmware_version"], "0.5.0")
+    check("proto is a number", got["protocol_version"], 5)
+    check("online", got["online"], True)
+    check("how", got["addressed_by"], "device_id")
+
+
+def test_a_path_addressed_section_still_reports_its_id():
+    """`serial:` sections must appear too, or an updater would skip them."""
+    c = cluster(device_map(config_serial="/dev/ttyUSB0", report=REPORT, seen=99.0))
+    got = c.get_status(0.0)["devices"]["T0_knomi"]
+    check("port", got["port"], "/dev/ttyUSB0")
+    check("id came from the device", got["device_id"], "19AA44")
+    check("how", got["addressed_by"], "serial")
+
+
+def test_a_device_that_never_answered_is_listed_as_offline():
+    """An updater must see the screen that needs flashing, not an absent key."""
+    c = cluster(device_map(config_device_id="19AA44"))
+    got = c.get_status(0.0)["devices"]["T0_knomi"]
+    check("still listed", got["device_id"], "19AA44")
+    check("no port yet", got["port"], None)
+    check("offline", got["online"], False)
+    check("no version", got["firmware_version"], None)
+
+
+def test_every_screen_appears_once():
+    c = cluster(device_map(screen_name="T0_knomi", config_device_id="19AA44"),
+                device_map(screen_name="T1_knomi", config_device_id="19AA45"))
+    check("both", sorted(c.get_status(0.0)["devices"]), ["T0_knomi", "T1_knomi"])
+
+
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]

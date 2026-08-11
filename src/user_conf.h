@@ -145,6 +145,10 @@
 // heater was set or cleared.
 #define TARGET_OPA LV_OPA_50
 
+// Where the hardware id sits on the waiting screen: under the printer name,
+// clear of the arc below it.
+#define IDENT_Y 38
+
 // The waiting screen's arc: how far it turns each tick, how wide it is, and
 // how often. One angle advanced by hand rather than lv_spinner's two - see
 // init_screen for why.

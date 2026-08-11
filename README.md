@@ -98,10 +98,10 @@ section as below and restart Klipper.
 ```ini
 [knomi_serial T0_knomi]  # a named device like this, or a bare [knomi_serial]
 
-# Use a /dev/serial/by-id/ path, not /dev/ttyUSB0. USB numbering moves between
-# reboots, and with several identical CH340 displays it moves between *them* -
-# so the screens quietly swap tools. `ls /dev/serial/by-id/` to find yours.
-serial: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+device_id: 19AA44   # Which display this is. Six hex characters, shown on the
+                    # display's own waiting screen and listed by
+                    # `python scripts/discover.py`. See "Which display is
+                    # which" below. Use this *or* `serial:`, not both.
 
 tool:    # Which tool this screen belongs to, e.g. T0. Optional. It sets the
          # tag the screen shows, and lets KNOMI_TOOL address this screen by
@@ -141,6 +141,51 @@ speed_z: 100
 gcodes:  # Comma separated G-Codes to show on the G-code page.
 ```
 
+### Which display is which
+
+Every display carries a permanent id burned into its chip, and says it in the
+status line it already sends every two seconds. Two ways to read it:
+
+```sh
+python scripts/discover.py            # a table of everything plugged in
+python scripts/discover.py --config   # the same, as sections to paste
+```
+
+or just read it off the glass — it is on each display's waiting screen, under
+the printer name.
+
+Addressing by `device_id:` means the display keeps its identity whichever socket
+it is in. That matters most on a toolchanger, where the failure it prevents is a
+quiet one: swap two leads and two screens describe the wrong tools, with nothing
+on either to say so.
+
+**`serial:` still works** and is unchanged. If you use it, be aware of what a
+path can and cannot promise here. The CH340K on these displays **reports no USB
+serial number** — the descriptor is empty — so nothing on the USB side tells one
+display from another, and every path names a *socket*:
+
+| | two identical displays | move a cable |
+| --- | --- | --- |
+| `/dev/ttyUSB0` | swaps between reboots | swaps |
+| `/dev/serial/by-id/` | the `_1` suffix is assigned by the **kernel** in enumeration order, not by the device — so it can move too | swaps |
+| udev rule on `KERNELS==` | stable | swaps |
+| `device_id:` | distinct | follows the display |
+
+A udev rule keyed to the physical USB port is the sound path-based option, and
+is the right tool if you deliberately want *position* rather than identity — the
+socket a tool is wired to, regardless of which display is in it:
+
+```udev
+# /etc/udev/rules.d/99-knomi.rules - one line per USB port on the hub
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", KERNELS=="3-1.6.5", SYMLINK+="knomi_t0"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", KERNELS=="3-1.7.1", SYMLINK+="knomi_t1"
+```
+
+`install.sh` does not copy udev rules into place for you. Writing a rules file
+is granting a device the right to appear under a name your config trusts, and
+that is a decision to make deliberately rather than one a setup script should
+make on your behalf.
+
 ### More than one screen
 
 One section per display. They find each other and share a single set of timers
@@ -149,14 +194,14 @@ write rather than a fourth pass over the machine:
 
 ```ini
 [knomi_serial T0_knomi]
-serial: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+device_id: 19AA44
 tool: T0
 heater_hotend: extruder
 heater_bed: heater_bed
 pages: tool, gcode
 
 [knomi_serial T1_knomi]
-serial: /dev/serial/by-id/usb-1a86_USB_Serial_1-if00-port0
+device_id: 19AA45
 tool: T1
 heater_hotend: extruder1
 heater_bed: heater_bed

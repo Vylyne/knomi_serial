@@ -273,8 +273,57 @@ Reports are parsed permissively in both directions: unknown keys from newer
 firmware are ignored, and keys missing from older firmware simply stay absent
 from `get_status`. That is what lets the report grow without a protocol bump.
 
-Report keys: `fw` `proto` `var` `sleep` `scr` `page` `cfg` `heap` `minheap` `up`
-`pages` `busy` `peak` `psram` `lvfree` `lvfrag` `flush` `fpx` `fus`.
+Report keys: `id` `fw` `proto` `var` `sleep` `scr` `page` `cfg` `heap` `minheap`
+`up` `pages` `busy` `peak` `psram` `lvfree` `lvfrag` `flush` `fpx` `fus`.
+
+### `id` is hardware, not issued
+
+`id` is the low three bytes of the eFuse MAC, six hex characters. It is the one
+report key that never changes, which is what makes discovery possible: the host
+opens a candidate port, waits for a line that is already coming, and reads who
+is on the end of it. No request, no response, no handshake to version.
+
+It is hardware-derived rather than a code the host issues and the device stores,
+because the requirement is that it survive a firmware update — and a stored code
+only clears that bar for the easiest case:
+
+| | `pio run -t upload` | `esptool erase_flash` | partition table changes |
+| --- | --- | --- | --- |
+| code in NVS | survives | **lost** | **lost** |
+| eFuse MAC | survives | survives | survives |
+
+Nothing generates it, nothing stores it, and it cannot be duplicated or reset.
+The top three bytes are dropped because they are Espressif's OUI and identical
+on every unit — six characters of noise in something a person types into
+printer.cfg. It is not hashed, so it can still be checked against
+`esptool chip_id`; hashing would trade that away to save two characters.
+
+`esp_read_mac(ESP_MAC_WIFI_STA)`, not `ESP.getEfuseMac()` — the latter hands
+back the six bytes reversed against the printed order, which would break exactly
+the property above.
+
+### The device map
+
+`printer.knomi_cluster.devices` is every section in one place, keyed by section
+name:
+
+```json
+{"T0_knomi": {"device_id": "19AA44", "port": "/dev/ttyUSB3",
+              "addressed_by": "device_id", "build_variant": "knomi",
+              "firmware_version": "0.5.0", "protocol_version": 5,
+              "online": true, "tool": "0"}}
+```
+
+For firmware updaters, which otherwise have to read `serial:` out of printer.cfg
+to find the displays. That no longer answers the question: a section addressed
+by `device_id:` has no path in it at all, and the path it is on today was
+discovered rather than configured. A section still appears here when it has
+never answered — `online: false`, versions `null` — because a display that needs
+flashing is precisely the one an updater must not be blind to.
+
+Deliberately excluded: heap, uptime, and the rest of the per-tick figures. Those
+are in each section's own `get_status`, and something polling the whole row for
+versions does not want them.
 
 ## Reserved for a proto 5: screen templates
 

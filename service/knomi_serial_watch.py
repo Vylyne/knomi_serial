@@ -114,6 +114,15 @@ class Watcher:
         self.listen = listen
         self.now = now
         self.devices = load(path)
+        #: Ports identified since this process started. Deliberately not "ports
+        #: named in the map": what was loaded from disk describes the machine as
+        #: it was when something last looked, and the case this exists to serve
+        #: is a cable moved while nothing was. Shut down, swap two leads, boot -
+        #: both ports are present and both are in the file, so treating the file
+        #: as settled means never looking again and being wrong forever. Every
+        #: port gets identified once per run; the loaded entries are hints in
+        #: the meantime.
+        self.confirmed = set()
         #: Ports not worth asking again yet, and when that changes.
         self.quiet_until = {}
 
@@ -145,9 +154,9 @@ class Watcher:
         for port in list(self.quiet_until):
             if port not in present:
                 del self.quiet_until[port]
+        self.confirmed &= present
 
-        spoken_for = {f.get("port") for f in self.devices.values()}
-        for port in sorted(present - spoken_for):
+        for port in sorted(present - self.confirmed):
             if now < self.quiet_until.get(port, 0):
                 continue
             got = self._identify(port)
@@ -160,6 +169,13 @@ class Watcher:
                 continue
             ident, fields = got
             self.quiet_until.pop(port, None)
+            self.confirmed.add(port)
+            # Whatever used to be recorded here is not here now. Without this a
+            # swap leaves both displays claiming the port, and which one a
+            # reader gets depends on dict order.
+            for other in [i for i, f in self.devices.items()
+                          if f.get("port") == port and i != ident]:
+                del self.devices[other]
             self.devices[ident] = {
                 "port": port,
                 "seen": now,

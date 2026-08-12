@@ -110,6 +110,53 @@ def test_the_map_survives_a_restart():
     check("loaded", again.devices["19aa44"]["port"], "/dev/ttyUSB0")
 
 
+def test_a_swap_while_the_watcher_was_stopped_is_noticed():
+    """The case the whole thing exists for: a cable moved while nobody looked.
+
+    Shut down, swap two leads, boot. Both ports are present and both are named
+    in the loaded file, so a watcher that treats what it loaded as settled never
+    looks again and is wrong for as long as it runs.
+    """
+    path = temp()
+    ports = ["/dev/ttyUSB0", "/dev/ttyUSB1"]
+    first = watcher(path, ports, {"/dev/ttyUSB0": "19aa44",
+                                  "/dev/ttyUSB1": "19aa38"})
+    first.tick()
+    check("before", k.port_map(path),
+          {"19aa44": "/dev/ttyUSB0", "19aa38": "/dev/ttyUSB1"})
+
+    # Machine off, leads swapped, watcher restarted against the same file.
+    second = watcher(path, ports, {"/dev/ttyUSB0": "19aa38",
+                                   "/dev/ttyUSB1": "19aa44"})
+    check("noticed", second.tick(), True)
+    check("after", k.port_map(path),
+          {"19aa38": "/dev/ttyUSB0", "19aa44": "/dev/ttyUSB1"})
+
+
+def test_one_port_is_never_claimed_by_two_displays():
+    """A replaced display must evict the one it replaced, not join it."""
+    path = temp()
+    ports = ["/dev/ttyUSB0"]
+    first = watcher(path, ports, {"/dev/ttyUSB0": "19aa44"})
+    first.tick()
+    second = watcher(path, ports, {"/dev/ttyUSB0": "aaaaaa"})
+    second.tick()
+    check("only the one that is there", len(second.devices), 1)
+    check("and it is the new one", k.port_map(path), {"aaaaaa": "/dev/ttyUSB0"})
+
+
+def test_a_confirmed_port_is_not_re_asked_every_tick():
+    """Once per run, not once per second - it opens the port to ask."""
+    path = temp()
+    obj = watcher(path, ["/dev/ttyUSB0"], {"/dev/ttyUSB0": "19aa44"})
+    obj.tick()
+    asked = []
+    obj._identify = lambda port: asked.append(port) or None
+    obj.tick()
+    obj.tick()
+    check("not re-asked", asked, [])
+
+
 def test_klipper_ignores_a_file_it_does_not_understand():
     """Forward compatibility: a newer writer must not be guessed at."""
     path = temp()

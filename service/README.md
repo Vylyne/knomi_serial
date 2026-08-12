@@ -99,10 +99,22 @@ Once a second it asks which serial ports are present — a sysfs read costing
 well under a millisecond, which opens nothing. Almost always the answer is the
 same as last time and it goes back to sleep.
 
-When a port **appears**, and it is not already accounted for, it listens
-to it for a few seconds and records whatever announces itself. When a port
+When a port **appears**, and it has not been identified *during this run*, it
+listens for a few seconds and records whatever announces itself. When a port
 **disappears**, its entry is dropped, because a path that cannot be opened is
 worse than no path at all.
+
+"During this run" rather than "is in the file" is deliberate, and it is the
+difference between the map being useful and being confidently wrong. Loading a
+map and treating it as settled means never re-examining a port — so shut the
+machine down, swap two leads, boot, and both ports are present, both are named,
+and nothing ever looks again. Which is exactly the case this exists to cover.
+Loaded entries are hints until this run has confirmed them; identifying a port
+also evicts whatever used to be recorded against it.
+
+Nothing garbage-collects the file while the service is not running. It does not
+need to: every entry is a hint, Klipper confirms each one from the display's
+first report, and a wrong entry costs a reconnect.
 
 It never holds a port. It takes the same `flock` that Klipper's sections and
 `esptool` take, so a port being driven or flashed is skipped rather than

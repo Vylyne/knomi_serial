@@ -10,9 +10,15 @@ This watches for serial ports appearing and disappearing, identifies anything
 new that is not already spoken for, and writes what it learns to a file that
 Klipper and a firmware updater can both read:
 
-    {"version": 1, "updated": 1723480000.0,
-     "devices": {"19aa44": {"port": "/dev/ttyUSB0", "seen": 1723479990.0,
+    {"version": 1,
+     "devices": {"19aa44": {"port": "/dev/ttyUSB0",
                             "fw": "0.5.0", "var": "knomi"}}}
+
+No timestamps in it. The file's own mtime says when it last changed, and an
+entry existing already means the display is there - identified during this run
+and not vanished since. Whether this service is alive at all is a question for
+`systemctl is-active knomi_serial`, not for a field that only moves when
+something is unplugged.
 
 It is never authoritative and nothing has to trust it. A display named in this
 file may have been moved since; Klipper checks the id in the first report it
@@ -94,11 +100,7 @@ def save(path, devices):
     indistinguishable from a genuine answer.
     """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    payload = {
-        "version": FORMAT_VERSION,
-        "updated": time.time(),
-        "devices": devices,
-    }
+    payload = {"version": FORMAT_VERSION, "devices": devices}
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, sort_keys=True)
@@ -178,7 +180,6 @@ class Watcher:
                 del self.devices[other]
             self.devices[ident] = {
                 "port": port,
-                "seen": now,
                 "fw": fields.get("fw"),
                 "var": fields.get("var"),
             }

@@ -60,11 +60,9 @@ so a reader can never catch it half-written:
 ```json
 {
   "version": 1,
-  "updated": 1723480000.0,
   "devices": {
     "19aa44": {
       "port": "/dev/ttyUSB0",
-      "seen": 1723479990.0,
       "fw": "0.5.0+54.g5509d4f",
       "var": "knomi"
     }
@@ -72,8 +70,42 @@ so a reader can never catch it half-written:
 }
 ```
 
+**No timestamps**, deliberately. The file's mtime already says when it last
+changed, and it is only written when something actually did. An entry existing
+means the display is present — identified during this run, and its port has not
+disappeared since — so a "last seen" would never change what a reader does with
+it.
+
+Nor can a timestamp tell you this service is running: it only moves when a
+display is plugged or unplugged, so a map untouched for a fortnight is the
+normal state of a printer nobody has been fiddling with. For that,
+`systemctl is-active knomi_serial`. Anything else means writing to the card on a
+timer to prove a liveness systemd already knows.
+
 `version` is checked, not assumed: a reader that does not recognise it ignores
 the file rather than guessing at its shape.
+
+## For a firmware updater
+
+Take Klipper's answer when there is one, and this file only when there is not:
+
+1. **Klipper up** — `printer.knomi_cluster.devices`, keyed by section name, with
+   `device_id`, `port`, `build_variant`, `firmware_version` and `online`. This
+   is live rather than last-observed, it is the only thing that can see the
+   ports Klipper holds, and it is the only place the config's section names
+   exist at all. Nothing here knows what `T0_knomi` means.
+2. **Klipper down** — this file, after `systemctl is-active knomi_serial`. If
+   the service is not running the file is whatever was true when it stopped,
+   and no field in it will tell you that.
+3. **Neither** — scan, the way `scripts/discover.py` does. Nothing is running
+   that could be holding a port, so it is free to open all of them.
+
+Flashing needs case 2 specifically: esptool wants the port to itself, so Klipper
+has to be stopped, which is exactly when its mapping disappears. That is the
+whole reason this service exists.
+
+Worth gating on whether the user has these displays configured at all, so a
+printer with none pays nothing for the check.
 
 ## Why it is safe to keep a map at all
 

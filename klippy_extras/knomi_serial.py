@@ -250,7 +250,13 @@ def report_id(line):
     for item in body.decode("utf-8", "replace").split(";"):
         key, sep, value = item.partition("=")
         if sep and key.strip() == "id":
-            return value.strip() or None
+            # Lowered here as well as on the config value, so both sides of
+            # the comparison are normalised in one language. The firmware
+            # formats with %02x today, which makes this a no-op - but that is
+            # an invariant held in C++ about a lookup performed in Python, and
+            # if it ever slipped every device_id: section would stop resolving
+            # against a config that still looked right.
+            return value.strip().lower() or None
     return None
 
 
@@ -895,7 +901,7 @@ class Knomi_Serial:
         self.config_serial = config.get("serial", None)
         self.config_device_id = config.get("device_id", None)
         if self.config_device_id is not None:
-            self.config_device_id = self.config_device_id.strip().upper()
+            self.config_device_id = self.config_device_id.strip().lower()
         if bool(self.config_serial) == bool(self.config_device_id):
             raise config.error(
                 f"{self.name}: give exactly one of serial: or device_id:. "

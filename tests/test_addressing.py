@@ -159,15 +159,15 @@ def device_map(**kw):
     return d
 
 
-REPORT = {"id": "19AA44", "fw": "0.5.0", "proto": "5", "var": "knomi"}
+REPORT = {"id": "19aa44", "fw": "0.5.0", "proto": "5", "var": "knomi"}
 
 
 def test_device_map_names_the_hardware_not_the_socket():
     """What mcu-updater reads instead of parsing `serial:` out of printer.cfg."""
-    c = cluster(device_map(config_device_id="19AA44", resolved_port="/dev/ttyUSB3",
+    c = cluster(device_map(config_device_id="19aa44", resolved_port="/dev/ttyUSB3",
                            report=REPORT, seen=99.0))
     got = c.get_status(0.0)["devices"]["T0_knomi"]
-    check("id", got["device_id"], "19AA44")
+    check("id", got["device_id"], "19aa44")
     check("resolved port", got["port"], "/dev/ttyUSB3")
     check("env", got["build_variant"], "knomi")
     check("firmware", got["firmware_version"], "0.5.0")
@@ -181,23 +181,23 @@ def test_a_path_addressed_section_still_reports_its_id():
     c = cluster(device_map(config_serial="/dev/ttyUSB0", report=REPORT, seen=99.0))
     got = c.get_status(0.0)["devices"]["T0_knomi"]
     check("port", got["port"], "/dev/ttyUSB0")
-    check("id came from the device", got["device_id"], "19AA44")
+    check("id came from the device", got["device_id"], "19aa44")
     check("how", got["addressed_by"], "serial")
 
 
 def test_a_device_that_never_answered_is_listed_as_offline():
     """An updater must see the screen that needs flashing, not an absent key."""
-    c = cluster(device_map(config_device_id="19AA44"))
+    c = cluster(device_map(config_device_id="19aa44"))
     got = c.get_status(0.0)["devices"]["T0_knomi"]
-    check("still listed", got["device_id"], "19AA44")
+    check("still listed", got["device_id"], "19aa44")
     check("no port yet", got["port"], None)
     check("offline", got["online"], False)
     check("no version", got["firmware_version"], None)
 
 
 def test_every_screen_appears_once():
-    c = cluster(device_map(screen_name="T0_knomi", config_device_id="19AA44"),
-                device_map(screen_name="T1_knomi", config_device_id="19AA45"))
+    c = cluster(device_map(screen_name="T0_knomi", config_device_id="19aa44"),
+                device_map(screen_name="T1_knomi", config_device_id="19aa45"))
     check("both", sorted(c.get_status(0.0)["devices"]), ["T0_knomi", "T1_knomi"])
 
 

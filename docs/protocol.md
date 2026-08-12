@@ -292,6 +292,13 @@ only clears that bar for the easiest case:
 | code in NVS | survives | **lost** | **lost** |
 | eFuse MAC | survives | survives | survives |
 
+Lowercase, and compared case-insensitively at both ends. Lowercase because the
+number's job is to be read off a 240px round screen and typed into a file: `b`
+against `8`, and `A` against `4`, are much harder to tell apart in caps. It also
+matches how esptool prints the MAC, which is the cross-check the format exists
+to allow. Nothing depends on the choice - the format lives in C++ and the lookup
+in Python, so both sides normalise rather than trusting the other to.
+
 Nothing generates it, nothing stores it, and it cannot be duplicated or reset.
 The top three bytes are dropped because they are Espressif's OUI and identical
 on every unit — six characters of noise in something a person types into
@@ -308,7 +315,7 @@ the property above.
 name:
 
 ```json
-{"T0_knomi": {"device_id": "19AA44", "port": "/dev/ttyUSB3",
+{"T0_knomi": {"device_id": "19aa44", "port": "/dev/ttyUSB3",
               "addressed_by": "device_id", "build_variant": "knomi",
               "firmware_version": "0.5.0", "protocol_version": 5,
               "online": true, "tool": "0"}}

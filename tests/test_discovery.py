@@ -76,21 +76,21 @@ def check(label, got, want):
 
 
 def test_one_display_is_found_by_its_id():
-    found, _ = patched({"/dev/ttyUSB0": FakePort(line("19AA44"))})
-    check("mapping", found, {"19AA44": "/dev/ttyUSB0"})
+    found, _ = patched({"/dev/ttyUSB0": FakePort(line("19aa44"))})
+    check("mapping", found, {"19aa44": "/dev/ttyUSB0"})
 
 
 def test_id_is_independent_of_which_socket():
     """The whole point: the same display on another port is the same display."""
-    a, _ = patched({"/dev/ttyUSB0": FakePort(line("19AA44"))})
-    b, _ = patched({"/dev/ttyUSB3": FakePort(line("19AA44"))})
+    a, _ = patched({"/dev/ttyUSB0": FakePort(line("19aa44"))})
+    b, _ = patched({"/dev/ttyUSB3": FakePort(line("19aa44"))})
     check("same id", set(a), set(b))
-    check("different port", (a["19AA44"], b["19AA44"]),
+    check("different port", (a["19aa44"], b["19aa44"]),
           ("/dev/ttyUSB0", "/dev/ttyUSB3"))
 
 
 def test_six_displays_all_resolve():
-    ids = ["19AA44", "19AA45", "7B3B14", "CCBA97", "0000FF", "ABCDEF"]
+    ids = ["19aa44", "19aa45", "7b3b14", "ccba97", "0000ff", "abcdef"]
     ports = {f"/dev/ttyUSB{n}": FakePort(line(i)) for n, i in enumerate(ids)}
     found, _ = patched(ports)
     check("all six", sorted(found), sorted(ids))
@@ -101,38 +101,55 @@ def test_a_silent_port_is_dropped_not_waited_on():
     """Something else on a CH340 must not stop the rest being found."""
     found, _ = patched({
         "/dev/ttyUSB0": FakePort(b""),
-        "/dev/ttyUSB1": FakePort(line("19AA44")),
+        "/dev/ttyUSB1": FakePort(line("19aa44")),
     })
-    check("only the display", found, {"19AA44": "/dev/ttyUSB1"})
+    check("only the display", found, {"19aa44": "/dev/ttyUSB1"})
 
 
 def test_a_port_that_will_not_open_is_skipped():
     """Held by another section, or unplugged since it was enumerated."""
     found, _ = patched({
         "/dev/ttyUSB0": None,
-        "/dev/ttyUSB1": FakePort(line("19AA44")),
+        "/dev/ttyUSB1": FakePort(line("19aa44")),
     })
-    check("the openable one", found, {"19AA44": "/dev/ttyUSB1"})
+    check("the openable one", found, {"19aa44": "/dev/ttyUSB1"})
 
 
 def test_a_port_that_dies_mid_listen_is_skipped():
     found, _ = patched({
         "/dev/ttyUSB0": FakePort(b"", fail=True),
-        "/dev/ttyUSB1": FakePort(line("19AA44")),
+        "/dev/ttyUSB1": FakePort(line("19aa44")),
     })
-    check("survivor", found, {"19AA44": "/dev/ttyUSB1"})
+    check("survivor", found, {"19aa44": "/dev/ttyUSB1"})
 
 
 def test_every_port_is_closed_again():
     """Discovery must not leave a handle on a port Klipper is about to open."""
     ports = {
         "/dev/ttyUSB0": FakePort(b""),
-        "/dev/ttyUSB1": FakePort(line("19AA44")),
+        "/dev/ttyUSB1": FakePort(line("19aa44")),
     }
     _, made = patched(ports)
     for path, port in made.items():
         if not port.closed:
             raise AssertionError(f"{path} was left open")
+
+
+def test_id_matching_does_not_depend_on_case():
+    """Both sides normalise, so neither the config nor the firmware sets it.
+
+    Lowercase is what the firmware sends and what the glass shows - `b` and `8`
+    are hard to tell apart in caps on a 240px screen, and it matches how esptool
+    prints the MAC. Nothing may depend on that choice, though: the format lives
+    in C++ and the lookup in Python, so a slip must not silently stop resolving.
+    """
+    check("uppercase from some other firmware",
+          k.report_id(k._CMD_PREFIX + k._CMD_REPORT + b"id=19AA44;fw=0.5.0"),
+          "19aa44")
+    check("what this firmware really sends",
+          k.report_id(line("19aa44")), "19aa44")
+    # And the config side, as Knomi_Serial.__init__ normalises it.
+    check("typed off the glass in caps", " 19AA44 ".strip().lower(), "19aa44")
 
 
 def test_report_id_ignores_lines_that_are_not_reports():

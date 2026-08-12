@@ -98,10 +98,11 @@ section as below and restart Klipper.
 ```ini
 [knomi_serial T0_knomi]  # a named device like this, or a bare [knomi_serial]
 
-device_id: 19AA44   # Which display this is. Six hex characters, shown on the
-                    # display's own waiting screen and listed by
-                    # `python scripts/discover.py`. See "Which display is
-                    # which" below. Use this *or* `serial:`, not both.
+device_id: 19aa44   # Which display this is. Six hex characters, case
+                    # insensitive, shown on the display's own waiting screen
+                    # and listed by `python scripts/discover.py`. See "Which
+                    # display is which" below. Use this *or* `serial:`, not
+                    # both.
 
 tool:    # Which tool this screen belongs to, e.g. T0. Optional. It sets the
          # tag the screen shows, and lets KNOMI_TOOL address this screen by
@@ -194,14 +195,14 @@ write rather than a fourth pass over the machine:
 
 ```ini
 [knomi_serial T0_knomi]
-device_id: 19AA44
+device_id: 19aa44
 tool: T0
 heater_hotend: extruder
 heater_bed: heater_bed
 pages: tool, gcode
 
 [knomi_serial T1_knomi]
-device_id: 19AA45
+device_id: 19aa45
 tool: T1
 heater_hotend: extruder1
 heater_bed: heater_bed

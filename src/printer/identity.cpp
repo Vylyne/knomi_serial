@@ -24,10 +24,15 @@ const char *id() {
     return text;
   }
 
+  // Lowercase because this is read off a 240px round screen by eye: `b` and
+  // `8` are hard to tell apart in caps and easy in lower, likewise `A` and `4`.
+  // It also matches how esptool prints the MAC, which is the cross-check this
+  // format exists to allow. The host compares case-insensitively regardless.
+  //
   // The low three bytes only. The top three are Espressif's OUI and are the
   // same on every one of these, so they would be six characters of noise in
   // something a person has to copy into printer.cfg.
-  snprintf(text, sizeof(text), "%02X%02X%02X", mac[3], mac[4], mac[5]);
+  snprintf(text, sizeof(text), "%02x%02x%02x", mac[3], mac[4], mac[5]);
   return text;
 }
 

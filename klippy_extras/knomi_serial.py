@@ -544,7 +544,7 @@ class KnomiCluster:
         self.devices = []
         self.tools = {}
         #: Hardware id to port, from the last discovery pass, and when the next
-        #: one is allowed. Empty until a device_id: section asks for one.
+        #: one is allowed. Filled by the pass at klippy:connect.
         self._ports = {}
         self._discover_after = 0
 
@@ -565,10 +565,103 @@ class KnomiCluster:
             desc=self.cmd_KNOMI_TOOL_help,
         )
 
+        # Before any section's own connect handler, which is what makes the
+        # collision check possible at all - see _handle_connect. The cluster is
+        # built by the first section's __init__ before that section registers
+        # anything, so registration order gives the sequencing for free.
+        printer.register_event_handler("klippy:connect", self._handle_connect)
         printer.register_event_handler("klippy:ready", self._handle_ready)
 
     def register(self, device):
         self.devices.append(device)
+
+    def _handle_connect(self):
+        """One discovery pass for the whole row, before anything opens a port.
+
+        Every candidate port, including the ones named by `serial:`. This is the
+        only moment the two addressing schemes can be checked against each
+        other: once a `serial:` section has its port open, nothing else can ask
+        what is on the end of it, and the answer is exactly what is needed to
+        notice that two sections are pointing at one display.
+
+        Blocking is correct here in a way it is not anywhere else. Startup is
+        allowed to take a couple of seconds, and discovery returns as soon as
+        every port has answered rather than waiting out the full window.
+        """
+        self._discover_once()
+        self._check_collisions()
+
+    def _discover_once(self, skip=()):
+        try:
+            self._ports = discover(skip=skip)
+        except Exception as e:
+            logging.warning(f"knomi_serial: discovery failed: {e}")
+            return
+        logging.info(
+            "knomi_serial: discovery found %s",
+            ", ".join(f"{i} on {p}" for i, p in sorted(self._ports.items()))
+            or "nothing",
+        )
+
+    def _check_collisions(self):
+        """Refuse a config where two sections describe one display.
+
+        Nothing downstream can recover from this. Both sections would open the
+        same port, and two readers on one tty split the byte stream between
+        them, so the symptom is two screens intermittently blank rather than
+        anything that names the cause.
+        """
+        by_id = {}
+        for device in self.devices:
+            if not device.config_device_id:
+                continue
+            first = by_id.setdefault(device.config_device_id, device.screen_name)
+            if first != device.screen_name:
+                raise self.printer.config_error(
+                    f"knomi_serial: {first} and {device.screen_name} both have "
+                    f"device_id: {device.config_device_id}. One display cannot "
+                    "be two screens."
+                )
+
+        # Paths are compared resolved, because a serial: section is very likely
+        # pointing at a udev symlink while discovery reports the real device.
+        def real(path):
+            # Only for something that is actually a filesystem entry. A serial:
+            # is very likely a udev symlink and has to be followed to match what
+            # discovery reports, but a Windows port is a name rather than a
+            # path, and realpath would happily resolve "COM5" against the
+            # working directory and put that in the error message.
+            try:
+                if os.path.lexists(path):
+                    return os.path.realpath(path)
+            except OSError:
+                pass
+            return path
+
+        wanted = {d.config_device_id: d.screen_name for d in self.devices
+                  if d.config_device_id}
+        on_port = {real(port): ident for ident, port in self._ports.items()}
+
+        by_path = {}
+        for device in self.devices:
+            if not device.config_serial:
+                continue
+            path = real(device.config_serial)
+            first = by_path.setdefault(path, device.screen_name)
+            if first != device.screen_name:
+                raise self.printer.config_error(
+                    f"knomi_serial: {first} and {device.screen_name} both have "
+                    f"serial: {device.config_serial}."
+                )
+            ident = on_port.get(path)
+            if ident in wanted:
+                raise self.printer.config_error(
+                    f"knomi_serial: {device.screen_name} names "
+                    f"{device.config_serial} by path, "
+                    f"but that display reports id {ident}, which "
+                    f"{wanted[ident]} also claims with device_id:. One display "
+                    "cannot be two screens - drop one of the two sections."
+                )
 
     def resolve_port(self, device_id):
         """Which port a hardware id is on, discovering if we do not know.
@@ -590,6 +683,16 @@ class KnomiCluster:
             return None
         self._discover_after = now + _RECONNECT_PERIOD
 
+        # Not while a job is running. This is called from the 10Hz update timer
+        # on the reactor thread, and discovery blocks for as long as it takes
+        # the slowest port to answer - up to the full listen window when one
+        # never does. That is survivable at startup and ruinous mid-print,
+        # where it would stall the thread feeding the steppers for seconds at a
+        # time, every few seconds, for as long as a display stayed unplugged.
+        # A screen that reappears during a print comes back when the job ends.
+        if self._printing():
+            return None
+
         # Never touch a port that is already somebody's. Two readers on one tty
         # do not queue - POSIX hands each of them a random subset of the bytes,
         # so probing a working display corrupts its stream rather than merely
@@ -603,11 +706,7 @@ class KnomiCluster:
             for path in (d.config_serial, d.resolved_port)
             if path
         )
-        try:
-            self._ports = discover(skip=claimed)
-        except Exception as e:
-            logging.warning(f"knomi_serial: discovery failed: {e}")
-            return None
+        self._discover_once(skip=claimed)
 
         wanted = {d.config_device_id for d in self.devices if d.config_device_id}
         missing = sorted(wanted - set(self._ports))
@@ -619,6 +718,14 @@ class KnomiCluster:
                 or "none",
             )
         return self._ports.get(device_id)
+
+    def _printing(self):
+        try:
+            state = self.print_stats.get_status(self.reactor.monotonic())["state"]
+        except Exception:
+            # Before klippy:ready there is no print_stats and no print either.
+            return False
+        return state in _ACTIVE_PRINT_STATES
 
     def tool_state(self, screen):
         """The filament record for one screen, created on first use.
@@ -1188,12 +1295,12 @@ class Knomi_Serial:
     # ------------------------------------------------------------------
 
     def _handle_connect(self):
-        # A section with device_id: has nothing to open yet - discovery has to
-        # listen for a couple of seconds first, and that cannot happen on the
-        # reactor thread during connect. It comes up on the retry cadence a
-        # moment later instead.
-        if self.config_serial:
-            self._connect()
+        # Both kinds of section connect here now. The cluster's own connect
+        # handler ran first and has already resolved every id it could find, so
+        # a device_id: section has a port to open rather than a wait ahead of
+        # it - which it used to, coming up several seconds after its neighbours
+        # for no reason the operator could see.
+        self._connect()
 
     def _port(self):
         """The path to open, or None if identity has not resolved to one yet."""

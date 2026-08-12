@@ -201,6 +201,79 @@ def test_every_screen_appears_once():
     check("both", sorted(c.get_status(0.0)["devices"]), ["T0_knomi", "T1_knomi"])
 
 
+class FakeConfigError(Exception):
+    pass
+
+
+def startup(devices, ports, printing=False):
+    """A cluster that has just run its klippy:connect discovery pass."""
+    c = k.KnomiCluster.__new__(k.KnomiCluster)
+    c.devices = list(devices)
+    c.tools = {}
+    c._ports = dict(ports)
+    c._discover_after = 0
+    c.printer = type("P", (), {
+        "config_error": staticmethod(lambda m: FakeConfigError(m))})()
+    state = "printing" if printing else "standby"
+    c.print_stats = type("S", (), {
+        "get_status": staticmethod(lambda e: {"state": state})})()
+    c.reactor = type("R", (), {"monotonic": staticmethod(lambda: 100.0)})()
+    return c
+
+
+def refuses_config(c, phrase):
+    try:
+        c._check_collisions()
+    except FakeConfigError as e:
+        if phrase not in str(e):
+            raise AssertionError(f"wrong reason: {e}") from None
+        return
+    raise AssertionError(f"accepted a config it should have refused ({phrase})")
+
+
+def test_two_sections_may_not_share_one_device_id():
+    c = startup([device_map(screen_name="T0_knomi", config_device_id="19aa44"),
+                 device_map(screen_name="T1_knomi", config_device_id="19aa44")],
+                {"19aa44": "/dev/ttyUSB0"})
+    refuses_config(c, "cannot be two screens")
+
+
+def test_a_serial_path_and_a_device_id_may_not_be_one_display():
+    """The reason discovery probes serial: ports too - this is unfindable later.
+
+    Once the serial: section has the port open, nothing can ask what is on the
+    end of it, so this collision has to be caught before anything connects.
+    """
+    c = startup([device_map(screen_name="T0_knomi", config_serial="/dev/ttyUSB0"),
+                 device_map(screen_name="T1_knomi", config_device_id="19aa44")],
+                {"19aa44": "/dev/ttyUSB0"})
+    refuses_config(c, "also claims with device_id")
+
+
+def test_two_serial_sections_may_not_share_a_path():
+    c = startup([device_map(screen_name="T0_knomi", config_serial="/dev/ttyUSB0"),
+                 device_map(screen_name="T1_knomi", config_serial="/dev/ttyUSB0")],
+                {})
+    refuses_config(c, "both have serial")
+
+
+def test_a_sound_config_is_accepted():
+    c = startup([device_map(screen_name="T0_knomi", config_serial="/dev/ttyUSB0"),
+                 device_map(screen_name="T1_knomi", config_device_id="19aa45")],
+                {"19aa44": "/dev/ttyUSB0", "19aa45": "/dev/ttyUSB1"})
+    c._check_collisions()   # must not raise
+
+
+def test_discovery_never_runs_mid_print():
+    """It blocks the reactor thread, which feeds the steppers."""
+    c = startup([device_map(screen_name="T0_knomi", config_device_id="ffffff")],
+                {}, printing=True)
+    probed = []
+    c._discover_once = lambda skip=(): probed.append(skip)
+    check("no port opened", c.resolve_port("ffffff"), None)
+    check("discovery not attempted", probed, [])
+
+
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]

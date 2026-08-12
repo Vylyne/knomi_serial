@@ -32,20 +32,25 @@ the exclusivity rather than chosen.
 
 ## Install
 
-```sh
-sudo cp agent/knomi-watch.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now knomi-watch
-```
+`install.sh` writes `agent/knomi_serial.service` with this machine's paths
+already filled in — where the repo is, who Klipper runs as, which python. It
+does not install it, because a root-owned unit running a script out of a git
+checkout is a decision to make deliberately rather than one an install script
+should make for you.
 
-Edit the paths in the unit if Klipper does not live in `/home/klipper`. Check it
-with:
+Try it first without installing anything:
 
 ```sh
 python3 agent/knomi_watch.py --once
 ```
 
-which does one pass, prints the map, and exits without writing a service.
+which does one pass, prints the map and exits. Then, if you want it running:
+
+```sh
+sudo cp agent/knomi_serial.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now knomi_serial
+```
 
 ## The file
 

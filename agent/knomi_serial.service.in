@@ -11,9 +11,9 @@ Type=simple
 # Same user as Klipper, so the map it writes is readable by the module without
 # anything having to be world-writable, and so it inherits the group that grants
 # access to the serial ports.
-User=klipper
-Group=klipper
-ExecStart=/usr/bin/python3 /home/klipper/knomi_serial/agent/knomi_watch.py
+User=@USER@
+Group=@USER@
+ExecStart=@PYTHON@ @REPO@/agent/knomi_watch.py --out @DATA@/devices.json
 Restart=always
 RestartSec=5
 
@@ -22,7 +22,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/klipper/printer_data/knomi
+ReadWritePaths=@DATA@
 
 [Install]
 WantedBy=multi-user.target

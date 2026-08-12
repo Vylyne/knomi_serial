@@ -60,6 +60,7 @@ def patched(ports):
     def fake(path, *a, **kw):
         if ports[path] is None:
             raise k.serial.SerialException("in use")
+        ports[path].kwargs = kw
         made[path] = ports[path]
         return ports[path]
 
@@ -180,6 +181,19 @@ def test_a_truncated_line_still_yields_the_id():
     half = full[:full.index(b";fw=") + 8] + full[-1:]
     found, _ = patched({"/dev/ttyUSB0": FakePort(half)})
     check("still found", found, {"19aa44": "/dev/ttyUSB0"})
+
+
+def test_discovery_asks_for_the_lock():
+    """Otherwise it opens straight past a section that is already talking.
+
+    pyserial's exclusive= is flock, which is advisory - it excludes only the
+    processes that also request it. Discovery not requesting it did not make it
+    fail against a busy port, it made it share the byte stream with whoever had
+    the port, which is worse than failing.
+    """
+    port = FakePort(line("19aa44"))
+    patched({"/dev/ttyUSB0": port})
+    check("took the lock", port.kwargs.get("exclusive"), True)
 
 
 def test_report_id_ignores_lines_that_are_not_reports():

@@ -198,10 +198,21 @@ def discover_reports(ports=None, listen=_DISCOVER_LISTEN, skip=()):
     live = {}
     for path in ports:
         try:
-            live[path] = serial.Serial(path, _BAUD_RATE, timeout=0)
+            # exclusive, and this is the half that was missing. pyserial's
+            # exclusive= is flock(LOCK_EX|LOCK_NB), which is advisory: it keeps
+            # out other processes that also ask for it and is invisible to one
+            # that does not. Sections take the lock, esptool takes the lock,
+            # and discovery used to open straight past both - so probing a
+            # display Klipper was already talking to did not fail, it split the
+            # byte stream with it. The symptom was discovery taking visibly
+            # longer with Klipper up, because a line assembled from half the
+            # bytes needs several report periods to arrive intact.
+            live[path] = serial.Serial(
+                path, _BAUD_RATE, timeout=0, exclusive=True)
         except (serial.SerialException, OSError) as e:
-            # Held by another section, or gone since it was enumerated. Neither
-            # is worth stopping for - the rest of the row is still findable.
+            # In use by a section or by a flashing tool, or gone since it was
+            # enumerated. None of those is worth stopping for - the rest of the
+            # row is still findable.
             logging.info(f"knomi_serial: discovery skipped {path}: {e}")
 
     found = {}

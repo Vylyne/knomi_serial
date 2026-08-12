@@ -155,10 +155,11 @@ python scripts/discover.py --config   # the same, as sections to paste
 or just read it off the glass — it is on each display's waiting screen, under
 the printer name. Case does not matter when you type it into `printer.cfg`.
 
-Stop Klipper before running the script. A port Klipper holds cannot be opened
-by anything else, so the script reports it as busy rather than guessing — which
-is the honest answer, and the reason a display already in use is never disturbed
-by discovery.
+Stop Klipper before running the script. Ports in use are locked with `flock`,
+which Klipper, esptool and these scripts all take, so a port already being
+driven is reported as busy rather than probed. The lock is advisory — it keeps
+out the tools that ask for it, not a `cat /dev/ttyUSB0` — but it covers the case
+that matters, which is two of these tools reaching for one display at once.
 
 At startup the cluster listens on every port once, before any section opens
 one, and refuses a config that describes one display twice — whether by two

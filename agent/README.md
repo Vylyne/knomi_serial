@@ -41,7 +41,7 @@ should make for you.
 Try it first without installing anything:
 
 ```sh
-python3 agent/knomi_watch.py --once
+python3 agent/knomi_serial_agent.py --once
 ```
 
 which does one pass, prints the map and exits. Then, if you want it running:

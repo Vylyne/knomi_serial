@@ -47,7 +47,7 @@ echo "Wrote $UNIT for this machine."
 echo "The watcher is optional - see agent/README.md for what it buys you."
 echo "Try it without installing anything:"
 echo
-echo "  python3 $REPO/agent/knomi_watch.py --once"
+echo "  python3 $REPO/agent/knomi_serial_agent.py --once"
 echo
 echo "To run it as a service:"
 echo

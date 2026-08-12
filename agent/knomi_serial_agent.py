@@ -20,8 +20,8 @@ receives and throws the entry away if it disagrees. That is what makes a cached
 map safe to keep at all - the file is a hint that saves a discovery pass, not a
 claim anybody acts on blindly.
 
-    python3 agent/knomi_watch.py --once      # one pass, print, exit
-    python3 agent/knomi_watch.py             # run until stopped
+    python3 agent/knomi_serial_agent.py --once   # one pass, print, exit
+    python3 agent/knomi_serial_agent.py          # run until stopped
 """
 
 import argparse
@@ -78,7 +78,7 @@ def load(path):
     except (OSError, ValueError):
         return {}
     if data.get("version") != FORMAT_VERSION:
-        logging.warning("knomi_watch: ignoring %s, unknown version %r",
+        logging.warning("knomi_serial_agent: ignoring %s, unknown version %r",
                         path, data.get("version"))
         return {}
     devices = data.get("devices")
@@ -122,7 +122,7 @@ class Watcher:
         try:
             found = k.discover_reports([port], listen=self.listen)
         except Exception as e:
-            logging.info("knomi_watch: %s could not be read: %s", port, e)
+            logging.info("knomi_serial_agent: %s could not be read: %s", port, e)
             return None
         for ident, fields in found.items():
             return ident, fields
@@ -196,7 +196,8 @@ def main():
     args = p.parse_args()
 
     logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s knomi_watch: %(message)s")
+        level=logging.INFO,
+        format="%(asctime)s knomi_serial_agent: %(message)s")
 
     w = Watcher(args.out, listen=args.listen)
     if args.once:

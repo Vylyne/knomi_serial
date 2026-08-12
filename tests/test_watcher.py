@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(_ROOT, "klippy_extras"))
 sys.path.insert(0, os.path.join(_ROOT, "agent"))
 
 import knomi_serial as k  # noqa: E402
-import knomi_watch as w  # noqa: E402
+import knomi_serial_agent as w  # noqa: E402
 
 
 def check(label, got, want):

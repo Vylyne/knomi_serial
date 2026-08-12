@@ -150,7 +150,7 @@ _UNSET = object()
 _ACTIVE_PRINT_STATES = ("printing", "paused")
 
 
-#: Where agent/knomi_watch.py writes what it has seen, if it is running. Read
+#: Where agent/knomi_serial_agent.py writes what it has seen, if it is running. Read
 #: as a hint and never as truth - see port_map.
 _DEVICE_MAP_PATH = os.path.expanduser("~/printer_data/knomi/devices.json")
 _DEVICE_MAP_VERSION = 1

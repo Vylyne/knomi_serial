@@ -170,6 +170,14 @@ def candidate_ports(skip=()):
 
 
 def discover(ports=None, listen=_DISCOVER_LISTEN, skip=()):
+    """{id: port}, the mapping Klipper needs. See discover_reports."""
+    return {
+        ident: fields["port"]
+        for ident, fields in discover_reports(ports, listen, skip).items()
+    }
+
+
+def discover_reports(ports=None, listen=_DISCOVER_LISTEN, skip=()):
     """Map hardware id to port, by listening rather than asking.
 
     Every display broadcasts a report line every two seconds without being
@@ -212,9 +220,10 @@ def discover(ports=None, listen=_DISCOVER_LISTEN, skip=()):
                 buffers[path] += port.read(waiting)
                 while b"\n" in buffers[path]:
                     line, _, buffers[path] = buffers[path].partition(b"\n")
-                    ident = report_id(line.strip())
+                    fields = report_fields(line.strip())
+                    ident = fields.get("id") if fields else None
                     if ident:
-                        found[ident] = path
+                        found[ident] = dict(fields, port=path)
                         # Closed here, not left to the loop below - this one is
                         # about to be handed to a section that will open it, and
                         # discovery must not still be holding it when that
@@ -242,22 +251,41 @@ def _int_or_none(text):
         return None
 
 
-def report_id(line):
-    """The `id` field of a report line, or None if this is not one."""
+def report_fields(line):
+    """Every `key=value` in a report line, or None if this is not one.
+
+    One parser for the whole line rather than one that hunts for `id` and
+    another that builds a dict, because the difference between them was a
+    second open of the port to re-read what had already been read.
+    """
     if not line.startswith(_CMD_PREFIX + _CMD_REPORT):
         return None
     body = line[len(_CMD_PREFIX) + len(_CMD_REPORT):]
+    out = {}
     for item in body.decode("utf-8", "replace").split(";"):
         key, sep, value = item.partition("=")
-        if sep and key.strip() == "id":
+        if not sep:
+            continue
+        key = key.strip()
+        value = value.strip()
+        if key == "id":
             # Lowered here as well as on the config value, so both sides of
             # the comparison are normalised in one language. The firmware
             # formats with %02x today, which makes this a no-op - but that is
             # an invariant held in C++ about a lookup performed in Python, and
             # if it ever slipped every device_id: section would stop resolving
             # against a config that still looked right.
-            return value.strip().lower() or None
-    return None
+            value = value.lower()
+            if not value:
+                continue
+        out[key] = value
+    return out
+
+
+def report_id(line):
+    """The `id` field of a report line, or None if this is not one."""
+    fields = report_fields(line)
+    return fields.get("id") if fields else None
 
 
 def _module_version():
@@ -562,10 +590,19 @@ class KnomiCluster:
             return None
         self._discover_after = now + _RECONNECT_PERIOD
 
-        # Never touch a port a section has been told to use by name. Opening it
-        # to ask who is there would interrupt a display that is already working
-        # perfectly well.
-        claimed = tuple(d.config_serial for d in self.devices if d.config_serial)
+        # Never touch a port that is already somebody's. Two readers on one tty
+        # do not queue - POSIX hands each of them a random subset of the bytes,
+        # so probing a working display corrupts its stream rather than merely
+        # being rude to it. Ports named by `serial:` were always excluded; ports
+        # a device_id: section has already resolved to were not, which meant one
+        # unplugged display had every working one probed every few seconds for
+        # as long as it stayed unplugged.
+        claimed = tuple(
+            path
+            for d in self.devices
+            for path in (d.config_serial, d.resolved_port)
+            if path
+        )
         try:
             self._ports = discover(skip=claimed)
         except Exception as e:
@@ -1175,6 +1212,12 @@ class Knomi_Serial:
                 path,
                 _BAUD_RATE,
                 write_timeout=_WRITE_TIMEOUT,
+                # TIOCEXCL on POSIX; a no-op on Windows, where ports are
+                # exclusive already. A skip list is a promise the code makes to
+                # itself and can forget to keep - this makes the mistake
+                # impossible rather than merely absent, so a stray
+                # scripts/discover.py run cannot disturb a live print either.
+                exclusive=True,
             )
             return True
         except serial.SerialException as e:

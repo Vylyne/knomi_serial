@@ -153,7 +153,12 @@ python scripts/discover.py --config   # the same, as sections to paste
 ```
 
 or just read it off the glass — it is on each display's waiting screen, under
-the printer name.
+the printer name. Case does not matter when you type it into `printer.cfg`.
+
+Stop Klipper before running the script. A port Klipper holds cannot be opened
+by anything else, so the script reports it as busy rather than guessing — which
+is the honest answer, and the reason a display already in use is never disturbed
+by discovery.
 
 Addressing by `device_id:` means the display keeps its identity whichever socket
 it is in. That matters most on a toolchanger, where the failure it prevents is a

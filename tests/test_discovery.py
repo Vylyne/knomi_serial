@@ -152,6 +152,36 @@ def test_id_matching_does_not_depend_on_case():
     check("typed off the glass in caps", " 19AA44 ".strip().lower(), "19aa44")
 
 
+def test_discovery_keeps_the_whole_report():
+    """The firmware version comes free - the line was parsed to find the id.
+
+    It used to be fetched by opening the port a second time, which is what made
+    the table print `?` at random with Klipper running: two readers on one tty
+    each get a random subset of the bytes.
+    """
+    real = k.serial.Serial
+    k.serial.Serial = lambda path, *a, **kw: FakePort(line("19aa44"))
+    try:
+        got = k.discover_reports(["/dev/ttyUSB0"], listen=0.5)
+    finally:
+        k.serial.Serial = real
+    check("port is in the fields", got["19aa44"]["port"], "/dev/ttyUSB0")
+    check("firmware came with it", got["19aa44"]["fw"], "0.5.0")
+    check("and so did the rest", got["19aa44"]["proto"], "5")
+
+
+def test_a_truncated_line_still_yields_the_id():
+    """`id` is first in the report for this reason: half a line still names it.
+
+    A competing reader leaves fragments, and identifying the display matters
+    more than the trimmings.
+    """
+    full = line("19aa44")
+    half = full[:full.index(b";fw=") + 8] + full[-1:]
+    found, _ = patched({"/dev/ttyUSB0": FakePort(half)})
+    check("still found", found, {"19aa44": "/dev/ttyUSB0"})
+
+
 def test_report_id_ignores_lines_that_are_not_reports():
     for text in (b"", b"KNOMI_CMD:CFG?", b"KNOMI_CMD:GCODE:HOME", b"noise"):
         if k.report_id(text) is not None:

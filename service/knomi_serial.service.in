@@ -13,7 +13,7 @@ Type=simple
 # access to the serial ports.
 User=@USER@
 Group=@USER@
-ExecStart=@PYTHON@ @REPO@/agent/knomi_serial_agent.py --out @DATA@/devices.json
+ExecStart=@PYTHON@ @REPO@/service/knomi_serial_watch.py --out @DATA@/devices.json
 Restart=always
 RestartSec=5
 

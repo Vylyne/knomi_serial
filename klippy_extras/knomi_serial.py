@@ -150,16 +150,16 @@ _UNSET = object()
 _ACTIVE_PRINT_STATES = ("printing", "paused")
 
 
-#: Where agent/knomi_serial_agent.py writes what it has seen, if it is running. Read
+#: Where service/knomi_serial_watch.py writes what it has seen, if it is running. Read
 #: as a hint and never as truth - see port_map.
 _DEVICE_MAP_PATH = os.path.expanduser("~/printer_data/knomi/devices.json")
 _DEVICE_MAP_VERSION = 1
 
 
 def port_map(path=None):
-    """{id: port} as last observed by the watcher agent, if there is one.
+    """{id: port} as last observed by the watcher, if there is one.
 
-    A hint, and treated as nothing more. The agent can see ports Klipper cannot
+    A hint, and treated as nothing more. The watcher can see ports Klipper cannot
     - it is running when Klipper is not, which is when a display gets flashed or
     a cable gets moved - so its map is often right and worth trying before
     spending a discovery pass. But it describes the past, and a display named
@@ -172,7 +172,7 @@ def port_map(path=None):
     is the whole reason for addressing by identity in the first place.
 
     Missing file, unreadable file, unknown version: no hint, discover instead.
-    The agent is an optimisation, never a dependency - most machines have one
+    The watcher is an optimisation, never a dependency - most machines have one
     display and will never run it.
     """
     # Resolved at call time rather than bound as a default, so the location can

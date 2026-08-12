@@ -1,4 +1,4 @@
-# The watcher agent
+# The watcher service
 
 **Optional.** Nothing needs it. One display and a `device_id:` line works
 without it, and Klipper falls back to discovering the row itself whenever the
@@ -14,7 +14,7 @@ display is being flashed, because flashing needs the port free.
 | | Klipper running | Klipper stopped |
 | --- | --- | --- |
 | ports Klipper holds | `printer.knomi_cluster.devices` | — |
-| every other port | the agent | the agent |
+| every other port | the watcher | the watcher |
 
 So the two are complements rather than alternatives, and the split is forced by
 the exclusivity rather than chosen.
@@ -28,11 +28,11 @@ the exclusivity rather than chosen.
   of seconds off startup, and no ports opened on spec.
 - **A display plugged in mid-print is noticed.** Klipper will not discover
   during a job — discovery blocks the thread that feeds the steppers — so
-  without the agent a display lost mid-print stays dark until the job ends.
+  without it a display lost mid-print stays dark until the job ends.
 
 ## Install
 
-`install.sh` writes `agent/knomi_serial.service` with this machine's paths
+`install.sh` writes `service/knomi_serial.service` with this machine's paths
 already filled in — where the repo is, who Klipper runs as, which python. It
 does not install it, because a root-owned unit running a script out of a git
 checkout is a decision to make deliberately rather than one an install script
@@ -41,13 +41,13 @@ should make for you.
 Try it first without installing anything:
 
 ```sh
-python3 agent/knomi_serial_agent.py --once
+python3 service/knomi_serial_watch.py --once
 ```
 
 which does one pass, prints the map and exits. Then, if you want it running:
 
 ```sh
-sudo cp agent/knomi_serial.service /etc/systemd/system/
+sudo cp service/knomi_serial.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now knomi_serial
 ```
@@ -99,7 +99,7 @@ Once a second it asks which serial ports are present — a sysfs read costing
 well under a millisecond, which opens nothing. Almost always the answer is the
 same as last time and it goes back to sleep.
 
-When a port **appears**, and it is not already accounted for, the agent listens
+When a port **appears**, and it is not already accounted for, it listens
 to it for a few seconds and records whatever announces itself. When a port
 **disappears**, its entry is dropped, because a path that cannot be opened is
 worse than no path at all.

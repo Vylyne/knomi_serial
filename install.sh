@@ -21,7 +21,7 @@ ln -sf "$REPO/klippy_extras/knomi_serial.py" "$EXTRA_PATH"
 # Generated because the paths in it are this machine's - where the repo is, who
 # Klipper runs as, which python. Hardcoding those was wrong and the failure was
 # quiet: systemd's ProtectHome plus a ReadWritePaths that does not exist starts
-# and then cannot write, which reads as "the agent does nothing" rather than as
+# and then cannot write, which reads as "the watcher does nothing" rather than as
 # a path problem.
 #
 # Not installed because putting a unit in /etc/systemd/system needs root, and a
@@ -32,7 +32,7 @@ ln -sf "$REPO/klippy_extras/knomi_serial.py" "$EXTRA_PATH"
 
 DATA="$HOME/printer_data/knomi"
 PYTHON="$(command -v python3)"
-UNIT="$REPO/agent/knomi_serial.service"
+UNIT="$REPO/service/knomi_serial.service"
 
 mkdir -p "$DATA"
 
@@ -40,14 +40,14 @@ sed -e "s|@USER@|$USER|g" \
     -e "s|@PYTHON@|$PYTHON|g" \
     -e "s|@REPO@|$REPO|g" \
     -e "s|@DATA@|$DATA|g" \
-    "$REPO/agent/knomi_serial.service.in" > "$UNIT"
+    "$REPO/service/knomi_serial.service.in" > "$UNIT"
 
 echo
 echo "Wrote $UNIT for this machine."
-echo "The watcher is optional - see agent/README.md for what it buys you."
+echo "The watcher is optional - see service/README.md for what it buys you."
 echo "Try it without installing anything:"
 echo
-echo "  python3 $REPO/agent/knomi_serial_agent.py --once"
+echo "  python3 $REPO/service/knomi_serial_watch.py --once"
 echo
 echo "To run it as a service:"
 echo

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""The watcher agent, and Klipper's willingness to distrust it.
+"""The watcher service, and Klipper's willingness to distrust it.
 
 Worth testing without hardware because the interesting cases are all about
 things being wrong: a map written before a cable moved, a file half-written when
-something read it, a port that belongs to somebody else. The agent is only safe
+something read it, a port that belongs to somebody else. It is only safe
 because nothing downstream believes it, and that is the property under test
 here.
 
@@ -17,10 +17,10 @@ import tempfile
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "klippy_extras"))
-sys.path.insert(0, os.path.join(_ROOT, "agent"))
+sys.path.insert(0, os.path.join(_ROOT, "service"))
 
 import knomi_serial as k  # noqa: E402
-import knomi_serial_agent as w  # noqa: E402
+import knomi_serial_watch as w  # noqa: E402
 
 
 def check(label, got, want):
@@ -102,7 +102,7 @@ def test_a_port_already_identified_is_left_alone():
     check("not re-asked", asked, [])
 
 
-def test_the_map_survives_a_restart_of_the_agent():
+def test_the_map_survives_a_restart():
     path = temp()
     obj = watcher(path, ["/dev/ttyUSB0"], {"/dev/ttyUSB0": "19aa44"})
     obj.tick()
@@ -111,7 +111,7 @@ def test_the_map_survives_a_restart_of_the_agent():
 
 
 def test_klipper_ignores_a_file_it_does_not_understand():
-    """Forward compatibility: a newer agent must not be guessed at."""
+    """Forward compatibility: a newer writer must not be guessed at."""
     path = temp()
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"version": 99, "devices": {"19aa44": {"port": "/dev/x"}}}, f)

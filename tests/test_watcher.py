@@ -138,6 +138,73 @@ def test_the_written_file_is_what_klipper_reads():
     check("round trip", k.port_map(path), {"19aa44": "/dev/ttyUSB3"})
 
 
+def cluster(path, printing=False, ident="19aa44"):
+    """A cluster whose only source of ports is the watcher's map."""
+    c = k.KnomiCluster.__new__(k.KnomiCluster)
+    c.devices = []
+    c.tools = {}
+    c._ports = {}
+    c._discover_after = 0
+    c._rejected = set()
+    state = "printing" if printing else "standby"
+    c.print_stats = type("S", (), {
+        "get_status": staticmethod(lambda e: {"state": state})})()
+    c.reactor = type("R", (), {"monotonic": staticmethod(lambda: 100.0)})()
+    d = k.Knomi_Serial.__new__(k.Knomi_Serial)
+    d.screen_name = "T0_knomi"
+    d.config_serial = None
+    d.config_device_id = ident
+    d.resolved_port = None
+    c.devices.append(d)
+    k._DEVICE_MAP_PATH = path
+    # Any fall through to listening is a failure of the test's premise.
+    c._discover_once = lambda skip=(): (_ for _ in ()).throw(
+        AssertionError("fell back to listening"))
+    return c
+
+
+def test_a_display_is_reconnected_mid_print_from_the_map():
+    """The whole reason resolve_port reads the file instead of listening."""
+    path = temp()
+    w.save(path, {"19aa44": {"port": "/dev/ttyUSB2", "seen": 1.0}})
+    c = cluster(path, printing=True)
+    check("resolved during a print", c.resolve_port("19aa44"), "/dev/ttyUSB2")
+
+
+def test_listening_is_still_refused_mid_print():
+    """A file read is safe on the reactor. Six seconds of listening is not."""
+    path = temp()
+    w.save(path, {"19aa45": {"port": "/dev/ttyUSB2", "seen": 1.0}})
+    c = cluster(path, printing=True)
+    check("no answer, and no listening", c.resolve_port("19aa44"), None)
+
+
+def test_a_map_that_proved_wrong_is_not_read_back_and_retried():
+    """Otherwise a stale file is an infinite reconnect loop.
+
+    Connect, fail the identity check, clear the cache, read the same wrong
+    answer out of the same file, connect again - every five seconds, forever.
+    """
+    path = temp()
+    w.save(path, {"19aa44": {"port": "/dev/ttyUSB2", "seen": 1.0}})
+    c = cluster(path, printing=True)
+    check("tried once", c.resolve_port("19aa44"), "/dev/ttyUSB2")
+    c.reject_port("19aa44", "/dev/ttyUSB2")
+    check("not tried again", c.resolve_port("19aa44"), None)
+
+
+def test_the_same_display_on_a_new_port_is_a_fresh_answer():
+    """Rejection is of a pairing, not of a display - it must not be permanent."""
+    path = temp()
+    w.save(path, {"19aa44": {"port": "/dev/ttyUSB2", "seen": 1.0}})
+    c = cluster(path, printing=True)
+    c.resolve_port("19aa44")
+    c.reject_port("19aa44", "/dev/ttyUSB2")
+    # The watcher notices the move and rewrites the map.
+    w.save(path, {"19aa44": {"port": "/dev/ttyUSB7", "seen": 2.0}})
+    check("the new port is tried", c.resolve_port("19aa44"), "/dev/ttyUSB7")
+
+
 def main():
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

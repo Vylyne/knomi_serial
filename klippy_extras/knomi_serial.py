@@ -613,6 +613,13 @@ class KnomiCluster:
         #: one is allowed. Filled by the pass at klippy:connect.
         self._ports = {}
         self._discover_after = 0
+        #: (id, port) pairs that were named and turned out to hold a different
+        #: display. Without this a stale map is a loop: connect, fail the
+        #: identity check, clear the cache, read the same wrong answer back out
+        #: of the same file, connect again - every five seconds, forever. Keyed
+        #: on the pair, so the same display named on a different port later is
+        #: a fresh answer and gets tried.
+        self._rejected = set()
 
         self.gcode = printer.lookup_object("gcode")
         self.heaters = None
@@ -664,9 +671,9 @@ class KnomiCluster:
         # couple of seconds to none.
         wanted = {d.config_device_id for d in self.devices if d.config_device_id}
         if wanted:
-            hinted = port_map()
-            if wanted <= set(hinted):
-                self._ports = {i: p for i, p in hinted.items() if i in wanted}
+            hinted = {i: self._map_hint(i) for i in wanted}
+            if all(hinted.values()):
+                self._ports = hinted
                 logging.info(
                     "knomi_serial: using the watcher's map for %s",
                     ", ".join(f"{i} on {p}" for i, p in sorted(self._ports.items())),
@@ -764,13 +771,23 @@ class KnomiCluster:
             return None
         self._discover_after = now + _RECONNECT_PERIOD
 
-        # Not while a job is running. This is called from the 10Hz update timer
-        # on the reactor thread, and discovery blocks for as long as it takes
-        # the slowest port to answer - up to the full listen window when one
-        # never does. That is survivable at startup and ruinous mid-print,
-        # where it would stall the thread feeding the steppers for seconds at a
-        # time, every few seconds, for as long as a display stayed unplugged.
-        # A screen that reappears during a print comes back when the job ends.
+        # The watcher's map first, and this part is allowed to run mid-print:
+        # it is a small file read rather than six seconds of listening, and the
+        # connect that follows is the same one a serial: section already does
+        # on this cadence.
+        hinted = self._map_hint(device_id)
+        if hinted:
+            self._ports[device_id] = hinted
+            return hinted
+
+        # Listening is a different matter, and not while a job is running. This
+        # is reached from the 10Hz update timer on the reactor thread, and
+        # discovery blocks until the slowest port answers - up to the full
+        # window when one never does. Survivable at startup and ruinous
+        # mid-print, where it would stall the thread feeding the steppers for
+        # seconds at a time, every few seconds, for as long as a display stayed
+        # unplugged. Without the watcher running, a screen that reappears
+        # during a print comes back when the job ends.
         if self._printing():
             return None
 
@@ -800,10 +817,29 @@ class KnomiCluster:
             )
         return self._ports.get(device_id)
 
-    def forget_ports(self):
-        """Throw away the discovery cache after it turned out to be wrong."""
+    def reject_port(self, device_id, port):
+        """This port was said to hold that display, and it does not.
+
+        Throws away the cache so the next pass looks properly, and remembers
+        the pairing so the answer that just failed is not simply read back out
+        of the watcher's map and tried again.
+        """
+        if device_id and port:
+            self._rejected.add((device_id, port))
         self._ports = {}
         self._discover_after = 0
+
+    def _map_hint(self, device_id):
+        """The watcher's answer for one id, unless it has already proved wrong.
+
+        A file read - tens of microseconds, opening nothing - which is what
+        makes it safe on the reactor thread mid-print where listening to ports
+        is not.
+        """
+        port = port_map().get(device_id)
+        if port and (device_id, port) not in self._rejected:
+            return port
+        return None
 
     def _printing(self):
         try:
@@ -1604,7 +1640,7 @@ class Knomi_Serial:
         # is worth keeping. The next pass re-reads the ports rather than
         # handing back the same mistake.
         self.resolved_port = None
-        self.cluster.forget_ports()
+        self.cluster.reject_port(self.config_device_id, self.resolved_port)
 
     def _process_report(self, payload):
         fields = parse_report(payload)

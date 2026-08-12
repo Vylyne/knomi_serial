@@ -260,7 +260,15 @@ def report_fields(line):
     """
     if not line.startswith(_CMD_PREFIX + _CMD_REPORT):
         return None
-    body = line[len(_CMD_PREFIX) + len(_CMD_REPORT):]
+    return parse_report(line[len(_CMD_PREFIX) + len(_CMD_REPORT):])
+
+
+def parse_report(body):
+    """The `key=value;key=value` body of a report, as a dict.
+
+    Permissive on purpose: unknown keys from a newer firmware are ignored, and
+    keys missing from an older one simply stay absent.
+    """
     out = {}
     for item in body.decode("utf-8", "replace").split(";"):
         key, sep, value = item.partition("=")
@@ -718,6 +726,11 @@ class KnomiCluster:
                 or "none",
             )
         return self._ports.get(device_id)
+
+    def forget_ports(self):
+        """Throw away the discovery cache after it turned out to be wrong."""
+        self._ports = {}
+        self._discover_after = 0
 
     def _printing(self):
         try:
@@ -1491,18 +1504,42 @@ class Knomi_Serial:
             # produces when a screen stops draining its buffer.
             self._drop(f"Lost connection: {e}")
 
+    def _verify_identity(self, reported):
+        """Check that the display on this port is the one we went looking for.
+
+        Discovery says which port an id was on; this says which id the port
+        actually has, and they are not the same claim. Anything that resolves a
+        port ahead of time - a discovery pass, and later a cached map written by
+        something outside Klipper - is describing the past, and a cable moved in
+        between would otherwise put one tool's readings on another tool's screen
+        with everything looking healthy. That is the exact failure addressing by
+        identity exists to prevent, so it is worth one comparison per report
+        rather than trusting the lookup that got us here.
+
+        Nothing to check for a `serial:` section: the path is the address, and
+        whatever is on the end of it is what was asked for.
+        """
+        if not self.config_device_id or not reported:
+            return
+        if reported == self.config_device_id:
+            return
+        self._drop(
+            f"expected display {self.config_device_id} on {self.resolved_port}, "
+            f"but it reports {reported} - dropping it and looking again"
+        )
+        # Both the section's answer and the row's cache were wrong, so neither
+        # is worth keeping. The next pass re-reads the ports rather than
+        # handing back the same mistake.
+        self.resolved_port = None
+        self.cluster.forget_ports()
+
     def _process_report(self, payload):
-        # Reports are `key=value;key=value`. Parsed permissively on purpose:
-        # unknown keys from a newer firmware are ignored, and keys missing from
-        # an older one simply stay absent from get_status.
-        fields = {}
-        for item in payload.decode("utf-8", "replace").split(";"):
-            key, sep, value = item.partition("=")
-            if sep:
-                fields[key.strip()] = value.strip()
+        fields = parse_report(payload)
 
         self.device_report = fields
         self.device_report_time = self.reactor.monotonic()
+
+        self._verify_identity(fields.get("id"))
 
         proto = fields.get("proto")
         if proto != self.warned_proto and proto != str(_PROTO_VERSION):

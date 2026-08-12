@@ -274,6 +274,64 @@ def test_discovery_never_runs_mid_print():
     check("discovery not attempted", probed, [])
 
 
+class FakeSerial:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def connected(ident, port="/dev/ttyUSB0"):
+    """A section that believes it has found its display and opened it."""
+    d = device_map(config_device_id=ident, resolved_port=port)
+    d.name = "knomi_serial T0_knomi"
+    d.serial = FakeSerial()
+    d.pending_cmd = b""
+    d.warned_proto = None
+    d.module_version = "0.5.0"
+    d.cluster = startup([d], {ident: port})
+    return d
+
+
+def test_the_right_display_is_kept():
+    d = connected("19aa44")
+    d._verify_identity("19aa44")
+    check("still connected", d.serial is None, False)
+    check("port kept", d.resolved_port, "/dev/ttyUSB0")
+
+
+def test_the_wrong_display_is_dropped_not_driven():
+    """A cable moved between discovery and connect. Without this the section
+    drives the wrong screen and everything looks healthy."""
+    d = connected("19aa44")
+    d._verify_identity("19aa45")
+    check("dropped", d.serial, None)
+    check("port forgotten", d.resolved_port, None)
+    check("cache invalidated", d.cluster._ports, {})
+
+
+def test_a_serial_section_has_nothing_to_verify():
+    """The path is the address; whatever answers on it is what was asked for."""
+    d = connected("19aa44")
+    d.config_device_id = None
+    d._verify_identity("19aa45")
+    check("left alone", d.serial is None, False)
+
+
+def test_firmware_too_old_to_report_an_id_is_not_dropped():
+    d = connected("19aa44")
+    d._verify_identity(None)
+    check("left alone", d.serial is None, False)
+
+
+def test_the_report_parser_lowercases_the_id_everywhere():
+    """_process_report used to have its own parser that skipped this."""
+    got = k.parse_report(b"id=19AA44;fw=0.5.0;proto=5")
+    check("id", got["id"], "19aa44")
+    check("others untouched", got["fw"], "0.5.0")
+
+
 def main():
     tests = [(name, fn) for name, fn in sorted(globals().items())
              if name.startswith("test_") and callable(fn)]

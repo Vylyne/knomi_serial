@@ -1,0 +1,28 @@
+[Unit]
+Description=Knomi_Serial display watcher
+Documentation=https://github.com/Vylyne/knomi_serial
+# Deliberately not After=klipper.service or Requires=. The whole point of this
+# is to know which display is on which port when Klipper is *not* running -
+# that is when a display gets flashed, and a port has to be free to be flashed.
+After=network.target
+
+[Service]
+Type=simple
+# Same user as Klipper, so the map it writes is readable by the module without
+# anything having to be world-writable, and so it inherits the group that grants
+# access to the serial ports.
+User=klipper
+Group=klipper
+ExecStart=/usr/bin/python3 /home/klipper/knomi_serial/agent/knomi_watch.py
+Restart=always
+RestartSec=5
+
+# It reads serial ports and writes one file. Nothing else is needed.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/klipper/printer_data/knomi
+
+[Install]
+WantedBy=multi-user.target

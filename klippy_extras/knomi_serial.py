@@ -11,6 +11,7 @@ uses, and which tool is mounted right now.
 
 import dataclasses
 import enum
+import json
 import logging
 import os
 import struct
@@ -147,6 +148,52 @@ _UNSET = object()
 #: Print states in which a job is underway. Leaving this set is what clears the
 #: per-tool `used` flags.
 _ACTIVE_PRINT_STATES = ("printing", "paused")
+
+
+#: Where agent/knomi_watch.py writes what it has seen, if it is running. Read
+#: as a hint and never as truth - see port_map.
+_DEVICE_MAP_PATH = os.path.expanduser("~/printer_data/knomi/devices.json")
+_DEVICE_MAP_VERSION = 1
+
+
+def port_map(path=None):
+    """{id: port} as last observed by the watcher agent, if there is one.
+
+    A hint, and treated as nothing more. The agent can see ports Klipper cannot
+    - it is running when Klipper is not, which is when a display gets flashed or
+    a cable gets moved - so its map is often right and worth trying before
+    spending a discovery pass. But it describes the past, and a display named
+    here may have moved since.
+
+    That is safe only because it is checked: the id is in every report, and
+    _verify_identity drops any section whose display disagrees with the one it
+    went looking for, clearing this cache on the way out. A wrong hint costs a
+    reconnect. It cannot put one tool's readings on another tool's screen, which
+    is the whole reason for addressing by identity in the first place.
+
+    Missing file, unreadable file, unknown version: no hint, discover instead.
+    The agent is an optimisation, never a dependency - most machines have one
+    display and will never run it.
+    """
+    # Resolved at call time rather than bound as a default, so the location can
+    # be overridden and so a test can point this somewhere real.
+    if path is None:
+        path = _DEVICE_MAP_PATH
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if data.get("version") != _DEVICE_MAP_VERSION:
+        return {}
+    devices = data.get("devices")
+    if not isinstance(devices, dict):
+        return {}
+    return {
+        ident: fields["port"]
+        for ident, fields in devices.items()
+        if isinstance(fields, dict) and fields.get("port")
+    }
 
 
 #: USB vendor ids worth listening to. 1A86 is the CH340 on the Knomi V2; 303A is
@@ -611,6 +658,21 @@ class KnomiCluster:
         self._check_collisions()
 
     def _discover_once(self, skip=()):
+        # The watcher's map first, when it covers everything asked for. Opening
+        # ports to learn what something else already wrote down is work worth
+        # skipping, and skipping it is what takes a six-display startup from a
+        # couple of seconds to none.
+        wanted = {d.config_device_id for d in self.devices if d.config_device_id}
+        if wanted:
+            hinted = port_map()
+            if wanted <= set(hinted):
+                self._ports = {i: p for i, p in hinted.items() if i in wanted}
+                logging.info(
+                    "knomi_serial: using the watcher's map for %s",
+                    ", ".join(f"{i} on {p}" for i, p in sorted(self._ports.items())),
+                )
+                return
+
         try:
             self._ports = discover(skip=skip)
         except Exception as e:

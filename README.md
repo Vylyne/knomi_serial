@@ -160,6 +160,18 @@ by anything else, so the script reports it as busy rather than guessing — whic
 is the honest answer, and the reason a display already in use is never disturbed
 by discovery.
 
+At startup the cluster listens on every port once, before any section opens
+one, and refuses a config that describes one display twice — whether by two
+`device_id:` sections, two `serial:` paths, or one of each:
+
+<img src="docs/img/serial_device_id_conflict.png" width="560">
+
+That single pass is the only moment the two schemes can be checked against each
+other, because once a `serial:` section holds its port nothing else can ask what
+is on the end of it. Left to run, both sections would open the same port and
+split its byte stream between them, so the symptom would be two screens blinking
+out at random with nothing naming the cause.
+
 Addressing by `device_id:` means the display keeps its identity whichever socket
 it is in. That matters most on a toolchanger, where the failure it prevents is a
 quiet one: swap two leads and two screens describe the wrong tools, with nothing

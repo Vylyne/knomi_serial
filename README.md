@@ -170,16 +170,28 @@ path can and cannot promise here. The CH340K on these displays **reports no USB
 serial number** — the descriptor is empty — so nothing on the USB side tells one
 display from another, and every path names a *socket*:
 
-| | two identical displays | move a cable |
-| --- | --- | --- |
-| `/dev/ttyUSB0` | swaps between reboots | swaps |
-| `/dev/serial/by-id/` | the `_1` suffix is assigned by the **kernel** in enumeration order, not by the device — so it can move too | swaps |
-| udev rule on `KERNELS==` | stable | swaps |
-| `device_id:` | distinct | follows the display |
+| | two identical displays | move a cable | move a hub | replace a dead display |
+| --- | --- | --- | --- | --- |
+| `/dev/ttyUSB0` | swaps between reboots | swaps | swaps | keeps working |
+| `/dev/serial/by-id/` | the `_1` suffix is assigned by the **kernel** in enumeration order, not by the device — so it can move too | swaps | swaps | keeps working |
+| udev rule on `KERNELS==` | distinct | **swaps silently** | **all of them stop at once** | keeps working |
+| `device_id:` | distinct | follows the display | follows the display | needs a one-line edit |
 
-A udev rule keyed to the physical USB port is the sound path-based option, and
-is the right tool if you deliberately want *position* rather than identity — the
-socket a tool is wired to, regardless of which display is in it:
+The two path failures are worth telling apart, because they feel nothing alike.
+Swapping two leads on the same hub is the *quiet* one — two screens confidently
+describe the wrong tools and nothing on either says so. Moving the hub itself is
+loud but total: a rule keyed to `3-1.6.5` matches nothing once that hub enumerates
+as `3-2`, so every display drops out together. The more USB tree you have above
+the displays, the more ways there are for a position map to stop being true, and
+the fragility scales with the size of the tree rather than the number of screens.
+
+`device_id:` has one cost in exchange, and it is the last column: a hardware id
+names *that display*, so replacing a dead one means editing the section that
+referred to it. A position map does not care which unit is in the socket.
+
+That is the actual choice — identity or position — rather than one being simply
+better. A udev rule keyed to the physical USB port is the right tool when you
+genuinely mean the socket, and is still fully supported:
 
 ```udev
 # /etc/udev/rules.d/99-knomi.rules - one line per USB port on the hub

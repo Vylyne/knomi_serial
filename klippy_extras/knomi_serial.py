@@ -1675,6 +1675,14 @@ class Knomi_Serial:
         return {
             # Burned into the chip, so it is the same after a reflash, an
             # erase_flash, and a cable moved to another socket.
+            # The full config section, so nothing has to rebuild it from the
+            # key. `[knomi_serial T0_knomi]` keys this map as `T0_knomi` while
+            # a bare `[knomi_serial]` keys it as `knomi_serial`, so prefixing
+            # the key is right for one and wrong for the other - and wrong in
+            # the single-display case, which is the one most people have.
+            # Also the exact spelling of the printer object; note that
+            # `configfile.settings` lowercases its own keys and this does not.
+            "section": self.name,
             "device_id": report.get("id") or self.config_device_id,
             "port": self.config_serial or self.resolved_port,
             "addressed_by": "serial" if self.config_serial else "device_id",

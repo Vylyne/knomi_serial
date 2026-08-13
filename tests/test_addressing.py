@@ -149,6 +149,7 @@ def device_map(**kw):
     """A device with just the fields the cluster's `devices` map reads."""
     d = k.Knomi_Serial.__new__(k.Knomi_Serial)
     d.screen_name = kw.get("screen_name", "T0_knomi")
+    d.name = kw.get("name", f"knomi_serial {d.screen_name}")
     d.config_serial = kw.get("config_serial")
     d.config_device_id = kw.get("config_device_id")
     d.config_tool = kw.get("config_tool", "0")
@@ -174,6 +175,21 @@ def test_device_map_names_the_hardware_not_the_socket():
     check("proto is a number", got["protocol_version"], 5)
     check("online", got["online"], True)
     check("how", got["addressed_by"], "device_id")
+
+
+def test_the_map_carries_the_full_section_name():
+    """So nothing has to rebuild it from the key, which is not uniform.
+
+    A named section keys on its suffix and a bare one keys on the whole name, so
+    prefixing the key is right for `[knomi_serial T0_knomi]` and wrong for
+    `[knomi_serial]` - the single-display case, which is most people.
+    """
+    c = cluster(device_map(screen_name="T0_knomi"),
+                device_map(screen_name="knomi_serial",
+                           name="knomi_serial"))
+    got = c.get_status(0.0)["devices"]
+    check("named", got["T0_knomi"]["section"], "knomi_serial T0_knomi")
+    check("bare", got["knomi_serial"]["section"], "knomi_serial")
 
 
 def test_a_path_addressed_section_still_reports_its_id():

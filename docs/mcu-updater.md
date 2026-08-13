@@ -40,7 +40,20 @@ curl -s 'localhost:7125/printer/objects/query?knomi_cluster'
               "tool": "0"}}
 ```
 
-Under `knomi_cluster.devices`, keyed by printer.cfg section name.
+Under `knomi_cluster.devices`, keyed by the section's *name part* — `T0_knomi`
+for `[knomi_serial T0_knomi]`, and `knomi_serial` for a bare `[knomi_serial]`.
+Each entry also carries `section` with the full name as printer.cfg spells it,
+so nothing has to reconstruct it: prefixing the key is right for a named section
+and wrong for a bare one, which is the single-display case most people have.
+
+**This does not replace reading `configfile.settings`.** This map is built by the
+module, so if the module fails to load there is no `knomi_cluster` either and
+every display silently vanishes from the list — exactly the one you must not be
+blind to. Klipper parses the config before loading anything, so a section absent
+here but present in `configfile.settings` is a real and reportable state: the
+module did not come up.
+
+Note also that `configfile.settings` lowercases its keys and this does not.
 
 Prefer this whenever Klipper is running, for three reasons. It is **live** —
 `online` is derived from how recently the display actually reported, not from

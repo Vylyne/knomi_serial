@@ -520,6 +520,12 @@ managed_services: klipper knomi_serial
 system_dependencies: scripts/moonraker-system-dependencies.json
 ```
 
+`primary_branch` must name the branch your checkout is actually on. Moonraker
+builds its upstream ref from it, so a mismatch compares you against a branch you
+are not tracking — and worse, `recover()` does `checkout(primary_branch)`
+followed by a hard reset, so the "recover" button offered when a repo looks
+wrong would move you onto that branch and discard local state.
+
 `system_dependencies` is how the watcher gets `python3-serial`, which it needs
 because the unit runs the system `python3` rather than Klipper's virtualenv.
 `install_script:` is the option it replaced and works too — Moonraker reads one

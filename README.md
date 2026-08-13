@@ -517,7 +517,7 @@ path: ~/knomi_serial
 origin: https://github.com/Vylyne/knomi_serial.git
 primary_branch: main
 managed_services: klipper knomi_serial
-system_dependencies: moonraker-system-dependencies.json
+system_dependencies: scripts/moonraker-system-dependencies.json
 ```
 
 `system_dependencies` is how the watcher gets `python3-serial`, which it needs

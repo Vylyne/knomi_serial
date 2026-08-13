@@ -43,9 +43,15 @@ def from_install_sh():
     )
 
 
+#: Under scripts/ rather than the repo root, matching where mcu-updater keeps
+#: its own and therefore what both [update_manager] sections point at. Named
+#: here rather than searched for, so moving it fails this test instead of
+#: failing silently in Moonraker - _verify_path only logs a warning.
+_SYSDEPS = os.path.join(_ROOT, "scripts", "moonraker-system-dependencies.json")
+
+
 def from_json():
-    path = os.path.join(_ROOT, "moonraker-system-dependencies.json")
-    with open(path, encoding="utf-8") as f:
+    with open(_SYSDEPS, encoding="utf-8") as f:
         return sorted(json.load(f)["debian"])
 
 
@@ -60,6 +66,22 @@ def test_moonraker_can_find_the_pkglist():
     if not pkgs:
         raise AssertionError(
             "no PKGLIST= line in install.sh that Moonraker's regex matches")
+
+
+def test_the_declared_path_is_where_the_file_is():
+    """moonraker.conf names this path; a moved file is a warning in a log.
+
+    Moonraker's _verify_path complains and carries on, so the packages simply
+    never install and the watcher fails to start much later, for reasons that
+    look nothing like a missing file.
+    """
+    if not os.path.isfile(_SYSDEPS):
+        raise AssertionError(f"{_SYSDEPS} is what the config points at")
+    with open(os.path.join(_ROOT, "install.sh"), encoding="utf-8") as f:
+        generated = f.read()
+    declared = "system_dependencies: scripts/moonraker-system-dependencies.json"
+    if declared not in generated:
+        raise AssertionError("install.sh writes a different path than this")
 
 
 def test_pyserial_is_declared():

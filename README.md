@@ -519,16 +519,32 @@ primary_branch: main
 managed_services: klipper knomi_serial
 ```
 
+`install.sh` does both of these for you where it safely can — see below.
+
 `managed_services` is what Moonraker restarts after pulling. `klipper` because
 the module is symlinked into `klippy/extras` and only reloads on restart; drop
 `knomi_serial` from the list if you are not running the watcher service.
 
-Moonraker will only control services named in its allowlist, so add the watcher
-to `~/printer_data/moonraker.asvc` as well:
+**The section name is not free.** Moonraker accepts a `managed_services` value
+only if it equals the `[update_manager <name>]` section itself, `klipper`, or
+`moonraker` — a case-sensitive comparison, in `_configure_managed_services`. So
+the section has to be called exactly what the systemd unit is called.
+`[update_manager Knomi_Serial]` with `managed_services: knomi_serial` is
+rejected, and it is rejected as a warning in `moonraker.log` rather than as
+anything you would notice.
+
+Moonraker also refuses to control a service that is not in its allowlist, so the
+watcher needs a line in `~/printer_data/moonraker.asvc`:
 
 ```
 knomi_serial
 ```
+
+`install.sh` appends that line if it is missing, since it is one word and
+trivially undone. It will add the `[update_manager]` section too if there is
+none — but if one already exists it reports what it found and leaves it alone,
+because renaming a section changes what the update panel shows and that is not
+a change to make silently in a live printer config.
 
 Nothing here is a Moonraker *agent*. The watcher opens no sockets and exchanges
 no events — it writes a file, and Klipper reads it. Making it an agent would

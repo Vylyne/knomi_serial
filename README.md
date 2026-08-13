@@ -517,11 +517,17 @@ path: ~/knomi_serial
 origin: https://github.com/Vylyne/knomi_serial.git
 primary_branch: main
 managed_services: klipper knomi_serial
+system_dependencies: moonraker-system-dependencies.json
 ```
 
-`install.sh` does both of these for you where it safely can — see below.
-`install_script:` is not needed and is not run: Moonraker reads it for
-`PKGLIST=` lines rather than executing it, and this repo has none.
+`system_dependencies` is how the watcher gets `python3-serial`, which it needs
+because the unit runs the system `python3` rather than Klipper's virtualenv.
+`install_script:` is the option it replaced and works too — Moonraker reads one
+or the other, never both — but note that neither *runs* `install.sh`. Moonraker
+only reads it, looking for `PKGLIST=` lines.
+
+`install.sh` does the `asvc` and `update_manager` wiring for you where it safely
+can — see below.
 
 `managed_services` is what Moonraker restarts after pulling. `klipper` because
 the module is symlinked into `klippy/extras` and only reloads on restart; drop

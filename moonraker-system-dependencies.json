@@ -1,0 +1,6 @@
+{
+    "_comment": "Must stay in sync with the PKGLIST line in install.sh, which is the deprecated mechanism Moonraker falls back to. tests/test_packaging.py fails if they drift.",
+    "debian": [
+        "python3-serial"
+    ]
+}

@@ -16,6 +16,12 @@ SERVICE_NAME="knomi_serial"
 # does. Declared because the watcher runs under the system python3 rather than
 # Klipper's virtualenv, and `import serial` fails there on a machine where only
 # Klipper's venv has pyserial.
+#
+# The same list lives in moonraker-system-dependencies.json, which is the option
+# that replaced this one. Moonraker reads one or the other and never both, so
+# which file matters depends on a line in somebody else's moonraker.conf - and
+# both are kept because a config predating `system_dependencies:` still works.
+# tests/test_packaging.py fails if they drift apart.
 PKGLIST="${PKGLIST} python3-serial"
 
 EXTRA_PATH="$HOME/klipper/klippy/extras/knomi_serial.py"

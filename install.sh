@@ -10,6 +10,14 @@ REPO="$(cd "$(dirname "$0")" && pwd)"
 # see the Moonraker block below for why those two are not independent.
 SERVICE_NAME="knomi_serial"
 
+# Scraped, not executed. Moonraker reads this file looking for PKGLIST= lines
+# and installs what it finds - see _read_system_dependencies in
+# update_manager/app_deploy.py - which is the whole of what `install_script:`
+# does. Declared because the watcher runs under the system python3 rather than
+# Klipper's virtualenv, and `import serial` fails there on a machine where only
+# Klipper's venv has pyserial.
+PKGLIST="${PKGLIST} python3-serial"
+
 EXTRA_PATH="$HOME/klipper/klippy/extras/knomi_serial.py"
 
 echo "Creating symbolic link to klippy_extras/knomi_serial.py at $EXTRA_PATH"
@@ -31,6 +39,18 @@ ln -sf "$REPO/klippy_extras/knomi_serial.py" "$EXTRA_PATH"
 
 DATA="$HOME/printer_data/knomi"
 PYTHON="$(command -v python3)"
+
+# The same dependency, for the manual path. Moonraker only reads PKGLIST when it
+# updates this repo, and somebody running install.sh by hand never goes near it.
+if ! "$PYTHON" -c "import serial" >/dev/null 2>&1; then
+    echo "pyserial is missing from $PYTHON, which the watcher needs."
+    if sudo apt-get install -y python3-serial >/dev/null 2>&1; then
+        echo "  installed python3-serial"
+    else
+        echo "  could not install it. The watcher will not start until you run:"
+        echo "    sudo apt install python3-serial"
+    fi
+fi
 UNIT="$REPO/service/knomi_serial.service"
 
 mkdir -p "$DATA"
@@ -50,12 +70,17 @@ echo "Wrote $UNIT for this machine."
 # this repo. Most printers have one display, address it by device_id, and need
 # nothing watching anything. So the rule is that install.sh keeps the service up
 # to date, and does not decide to give you one: already installed means the unit
-# is refreshed and the service restarted, which is what makes this safe to run
-# from Moonraker's update manager after every pull.
+# is refreshed and the service restarted.
 #
-# No prompt, deliberately. install_script runs non-interactively under the
-# update manager, and a read here would hang an update rather than ask anybody
-# anything.
+# Note that Moonraker does not run this script. `install_script:` is read as
+# text and scraped for PKGLIST= to find apt packages - see
+# _read_system_dependencies in app_deploy.py - so an update never reaches here.
+# It does not need to: ExecStart points into the repo, so a git pull updates the
+# watcher's code where it stands and `managed_services: knomi_serial` restarts
+# it. The unit itself only goes stale if the paths in it change.
+#
+# No prompt anywhere regardless, so that running this from anything without a
+# terminal cannot hang waiting for an answer.
 INSTALLED_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 if [ "${1:-}" = "--watch" ] || [ -f "$INSTALLED_UNIT" ]; then
     # Whether it is running now decides whether it is running afterwards.

@@ -520,6 +520,8 @@ managed_services: klipper knomi_serial
 ```
 
 `install.sh` does both of these for you where it safely can — see below.
+`install_script:` is not needed and is not run: Moonraker reads it for
+`PKGLIST=` lines rather than executing it, and this repo has none.
 
 `managed_services` is what Moonraker restarts after pulling. `klipper` because
 the module is symlinked into `klippy/extras` and only reloads on restart; drop

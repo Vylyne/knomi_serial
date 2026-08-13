@@ -63,9 +63,12 @@ watching anything. And a service you stopped on purpose stays stopped: a plain
 `systemctl restart` would start it again, and `enable` would undo a deliberate
 `disable`, which is not an update's business.
 
-Which is what makes it safe under Moonraker's update manager. Every pull
-refreshes the unit for whoever is running the watcher, and does nothing at all
-to anybody who is not.
+Moonraker updates do not run this script — `install_script:` is read for
+dependency lines, never executed. They do not need to: `ExecStart` points at the
+copy in the repo, so `git pull` updates the watcher's code in place and
+`managed_services: knomi_serial` restarts it into the new version. Re-run
+`install.sh` only when the *unit* needs rebuilding, which means when a path in
+it changed.
 
 There is no prompt, deliberately. `install_script` runs non-interactively under
 the update manager, and a prompt there would hang an update rather than ask

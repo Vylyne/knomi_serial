@@ -506,6 +506,35 @@ needs at least one tag in `vX.Y.Z` form, and no manifest file in this repo.
 Comparing the tag Moonraker reports against `firmware_version` above is what
 tells you the device is due a reflash.
 
+### Moonraker
+
+In `moonraker.conf`, to get this into the update panel:
+
+```ini
+[update_manager knomi_serial]
+type: git_repo
+path: ~/knomi_serial
+origin: https://github.com/Vylyne/knomi_serial.git
+primary_branch: main
+managed_services: klipper knomi_serial
+```
+
+`managed_services` is what Moonraker restarts after pulling. `klipper` because
+the module is symlinked into `klippy/extras` and only reloads on restart; drop
+`knomi_serial` from the list if you are not running the watcher service.
+
+Moonraker will only control services named in its allowlist, so add the watcher
+to `~/printer_data/moonraker.asvc` as well:
+
+```
+knomi_serial
+```
+
+Nothing here is a Moonraker *agent*. The watcher opens no sockets and exchanges
+no events — it writes a file, and Klipper reads it. Making it an agent would
+mean it could only work while Moonraker was up, which is the opposite of the
+point: see [service/README.md](service/README.md).
+
 `printer::kProtoVersion` (`src/printer/printer.h`) and `_PROTO_VERSION`
 (`klippy_extras/knomi_serial.py`) are separate from the release version and are
 bumped only when a wire format changes. A mismatch is logged once to

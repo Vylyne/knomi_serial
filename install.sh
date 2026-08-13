@@ -189,6 +189,7 @@ origin: https://github.com/Vylyne/knomi_serial.git
 path: $REPO
 primary_branch: main
 managed_services: klipper $SERVICE_NAME
+system_dependencies: scripts/moonraker-system-dependencies.json
 CONF
         echo "  added [update_manager $SERVICE_NAME] to moonraker.conf"
         MOONRAKER_CHANGED=yes

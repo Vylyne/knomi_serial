@@ -48,12 +48,24 @@ One pass, prints the map, exits. Then, if you want it running:
 the repo is, who Klipper runs as, which python — then installs, enables and
 starts it.
 
-**Plain `./install.sh` will not give you a service you did not have.** Unlike
-the Klipper module, a daemon is not implied by installing this repo: most
-printers have one display, address it by `device_id`, and need nothing watching
-anything. But if the unit is already installed, every run refreshes it and
-restarts the service, so a `git pull` picks up changes to the watcher — which is
-what makes it safe to run from Moonraker's update manager on every update.
+**`install.sh` never changes whether you are running this.** It refreshes what
+is there; it does not decide anything:
+
+| before | `./install.sh` | `./install.sh --watch` |
+| --- | --- | --- |
+| not installed | says how, installs nothing | installs, enables, starts |
+| installed, running | unit refreshed, restarted | same |
+| installed, stopped | unit refreshed, **left stopped** | same |
+
+Both halves of that matter. A daemon is not implied by installing this repo —
+most printers have one display, address it by `device_id`, and need nothing
+watching anything. And a service you stopped on purpose stays stopped: a plain
+`systemctl restart` would start it again, and `enable` would undo a deliberate
+`disable`, which is not an update's business.
+
+Which is what makes it safe under Moonraker's update manager. Every pull
+refreshes the unit for whoever is running the watcher, and does nothing at all
+to anybody who is not.
 
 There is no prompt, deliberately. `install_script` runs non-interactively under
 the update manager, and a prompt there would hang an update rather than ask

@@ -58,16 +58,42 @@ echo "Wrote $UNIT for this machine."
 # anything.
 INSTALLED_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 if [ "${1:-}" = "--watch" ] || [ -f "$INSTALLED_UNIT" ]; then
-    if [ -f "$INSTALLED_UNIT" ]; then
-        echo "Updating the $SERVICE_NAME service."
-    else
-        echo "Installing the $SERVICE_NAME service."
+    # Whether it is running now decides whether it is running afterwards.
+    # `systemctl restart` would start a service somebody had deliberately
+    # stopped, and `enable` would re-enable one they had deliberately disabled -
+    # an update is not the place to overrule either of those.
+    FIRST_INSTALL=no
+    [ -f "$INSTALLED_UNIT" ] || FIRST_INSTALL=yes
+
+    WAS_ACTIVE=no
+    if systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
+        WAS_ACTIVE=yes
+        sudo systemctl stop "${SERVICE_NAME}.service"
     fi
+
+    if [ "$FIRST_INSTALL" = yes ]; then
+        echo "Installing the $SERVICE_NAME service."
+    else
+        echo "Updating the $SERVICE_NAME service."
+    fi
+
     sudo install -m 0644 -o root -g root "$UNIT" "$INSTALLED_UNIT"
     sudo systemctl daemon-reload
-    sudo systemctl enable "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
-    sudo systemctl restart "${SERVICE_NAME}.service"
-    echo "  $(systemctl is-active "${SERVICE_NAME}.service" || true) - systemctl status $SERVICE_NAME"
+
+    if [ "$FIRST_INSTALL" = yes ]; then
+        # Enabled only on the run that asked for the service. A later update
+        # must not re-enable one that was switched off in between.
+        sudo systemctl enable "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+        WAS_ACTIVE=yes
+    fi
+
+    if [ "$WAS_ACTIVE" = yes ]; then
+        sudo systemctl start "${SERVICE_NAME}.service"
+        echo "  $(systemctl is-active "${SERVICE_NAME}.service" || true) - systemctl status $SERVICE_NAME"
+    else
+        echo "  unit refreshed; service was not running, so it was left stopped."
+        echo "  start it with: sudo systemctl start $SERVICE_NAME"
+    fi
 else
     echo "The watcher is optional - see service/README.md for what it buys you."
     echo "Try it without installing anything:"

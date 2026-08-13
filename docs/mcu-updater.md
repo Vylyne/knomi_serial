@@ -75,27 +75,57 @@ timestamps: the file's mtime says when it last changed, and an entry existing
 means the display was identified during the current run of the service and its
 port has not disappeared since.
 
-**This is the case flashing actually needs.** esptool requires the port to
-itself, so Klipper has to be stopped — which is precisely when source 1 stops
-existing. That is the whole reason the service exists.
+This is what answers when Klipper cannot — a CLI flash with nothing running, or
+any question asked while the host is down. It is also cheap enough to consult
+freely, being a file read rather than seconds of listening.
 
-### 3. Neither → scan
+It is still a record of the past, though, so do not write firmware on the
+strength of it. Use it to decide *what to do*; use source 3 to decide *which
+port to write to*.
 
-Nothing is holding a port, so open them all:
+### 3. Klipper is stopped and you are about to write → scan
 
-```sh
-python3 scripts/discover.py
-```
-
-or from Python, which is what that script does:
+The other two are read *before* the ports are released, so both describe where
+displays **were**. With Klipper stopped nothing holds a port, and listening says
+where they are with esptool about to write. Resolve identity here, at flash
+time, rather than carrying a path from earlier:
 
 ```python
+import sys, os
+sys.path.insert(0, os.path.join(REPO, "klippy_extras"))
 import knomi_serial
-knomi_serial.discover_reports()      # {id: {port, fw, var, ...}}
+knomi_serial.discover_reports()      # {id: {"port": ..., "fw": ..., "var": ...}}
 ```
 
-Takes about a second per pass — displays broadcast a status line every two
-seconds unprompted, so this listens rather than asking.
+About a second — displays broadcast every two seconds unprompted, so this
+listens rather than asking. `python3 scripts/discover.py` does the same thing
+for a human at a terminal.
+
+## What this repo promises not to break
+
+`scripts/discover.py` is a human-facing tool and may change freely. The stable
+surface is the module, because that is what a flashing tool imports, and because
+breaking it surfaces at the worst possible moment: mid-flash, with Klipper
+stopped and a display half-written.
+
+| | |
+| --- | --- |
+| `klippy_extras/knomi_serial.py` | imports under a plain `python3`, outside Klipper |
+| `discover_reports(ports=None, listen=None, skip=())` | all arguments optional |
+| its return | `{id: {...}}`, keyed by the lowercase hardware id |
+| each entry | carries at least `port`, `fw`, `var` |
+| `candidate_ports(skip=())` | is there anything to look at |
+| `port_map(path=None)` | `{id: port}` from the watcher's file |
+| `python3-serial` | declared as a system dependency, so `import serial` works |
+
+Fields may be added. Removing one, renaming a function, or changing the key from
+the hardware id is a breaking change to somebody else's flashing safeguard, not
+a refactor.
+
+`tests/test_contract.py` in this repo checks every row of that table, including
+importing the module in a subprocess the way a consumer does — a Klipper-only
+import added at module scope would otherwise pass every test here and fail only
+during a flash.
 
 ## Deciding whether to flash
 

@@ -133,6 +133,7 @@ ASVC="$PRINTER_DATA/moonraker.asvc"
 MOONRAKER_CONF="$PRINTER_DATA/config/moonraker.conf"
 
 echo "Moonraker:"
+MOONRAKER_CHANGED=no
 
 if [ ! -f "$ASVC" ]; then
     echo "  no $ASVC - skipping (Moonraker not installed here?)"
@@ -141,6 +142,7 @@ elif grep -qx "$SERVICE_NAME" "$ASVC"; then
 else
     printf '%s\n' "$SERVICE_NAME" >> "$ASVC"
     echo "  added $SERVICE_NAME to moonraker.asvc"
+    MOONRAKER_CHANGED=yes
 fi
 
 if [ ! -f "$MOONRAKER_CONF" ]; then
@@ -158,7 +160,7 @@ primary_branch: main
 managed_services: klipper $SERVICE_NAME
 CONF
         echo "  added [update_manager $SERVICE_NAME] to moonraker.conf"
-        echo "  restart Moonraker to pick it up"
+        MOONRAKER_CHANGED=yes
     else
         FOUND="$(printf '%s' "$SECTION_LINE" | sed 's/^[0-9]*:\[update_manager *//; s/\].*$//')"
         echo "  [update_manager $FOUND] already present, left alone"
@@ -175,6 +177,32 @@ CONF
             echo
             echo "  Harmless to leave as is if you do not run the watcher."
         fi
+    fi
+fi
+
+# Neither file is re-read while Moonraker runs, and moonraker.asvc is the one
+# that bites: _init_allowed_services() loads it once in Machine.__init__ and
+# caches the result, so a service appended to it stays forbidden until a
+# restart - and stays forbidden silently, since the refusal is a line in
+# moonraker.log.
+if [ "$MOONRAKER_CHANGED" = yes ]; then
+    # Read from [server] rather than assumed - the port is configurable.
+    PORT="$(awk '/^\[server\]/{s=1;next} /^\[/{s=0} s && /^[[:space:]]*port:/{gsub(/[^0-9]/,"",$0); print; exit}' "$MOONRAKER_CONF" 2>/dev/null || true)"
+    PORT="${PORT:-7125}"
+    if [ ! -t 0 ]; then
+        # No tty almost certainly means this is Moonraker's own install_script.
+        # Restarting the process that is running this script would kill the
+        # update halfway through, so say what is needed and let it finish.
+        echo
+        echo "  Moonraker has to restart to read that. Once the update finishes:"
+        echo "    sudo systemctl restart moonraker"
+    elif ! command -v curl >/dev/null 2>&1; then
+        echo "  restart Moonraker to pick that up: sudo systemctl restart moonraker"
+    elif curl -fsS -m 5 -X POST "http://localhost:$PORT/server/restart" >/dev/null 2>&1; then
+        echo "  asked Moonraker to restart, so it picks that up"
+    else
+        echo "  could not reach Moonraker on port $PORT - restart it yourself:"
+        echo "    sudo systemctl restart moonraker"
     fi
 fi
 echo

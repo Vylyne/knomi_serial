@@ -87,8 +87,18 @@ port to write to*.
 
 The other two are read *before* the ports are released, so both describe where
 displays **were**. With Klipper stopped nothing holds a port, and listening says
-where they are with esptool about to write. Resolve identity here, at flash
-time, rather than carrying a path from earlier:
+where they are with esptool about to write.
+
+Use it to **verify**, not merely to resolve. You already have an answer by this
+point — a section name, an id, a port — and re-deriving it silently would flash
+whatever happens to be present. Checking the answer you came in with lets a
+disagreement stop the write:
+
+- the id is not on the port you expected → it moved; flash the port it is on
+  now, and say so
+- the id is not there at all → refuse. Do not flash the display that *is*
+  present, because nobody asked for that one
+- an id answers that was not in the plan → a display was added; leave it alone
 
 ```python
 import sys, os

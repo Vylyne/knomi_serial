@@ -32,24 +32,39 @@ the exclusivity rather than chosen.
 
 ## Install
 
-`install.sh` writes `service/knomi_serial.service` with this machine's paths
-already filled in — where the repo is, who Klipper runs as, which python. It
-does not install it, because a root-owned unit running a script out of a git
-checkout is a decision to make deliberately rather than one an install script
-should make for you.
-
 Try it first without installing anything:
 
 ```sh
 python3 service/knomi_serial_watch.py --once
 ```
 
-which does one pass, prints the map and exits. Then, if you want it running:
+One pass, prints the map, exits. Then, if you want it running:
 
 ```sh
-sudo cp service/knomi_serial.service /etc/systemd/system/
+./install.sh --watch
+```
+
+`install.sh` generates the unit with this machine's paths already in it — where
+the repo is, who Klipper runs as, which python — then installs, enables and
+starts it.
+
+**Plain `./install.sh` will not give you a service you did not have.** Unlike
+the Klipper module, a daemon is not implied by installing this repo: most
+printers have one display, address it by `device_id`, and need nothing watching
+anything. But if the unit is already installed, every run refreshes it and
+restarts the service, so a `git pull` picks up changes to the watcher — which is
+what makes it safe to run from Moonraker's update manager on every update.
+
+There is no prompt, deliberately. `install_script` runs non-interactively under
+the update manager, and a prompt there would hang an update rather than ask
+anyone anything.
+
+To remove it:
+
+```sh
+sudo systemctl disable --now knomi_serial
+sudo rm /etc/systemd/system/knomi_serial.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now knomi_serial
 ```
 
 ## The file

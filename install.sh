@@ -6,6 +6,10 @@ set -e
 # nonsense link target built from the current directory and an absolute one.
 REPO="$(cd "$(dirname "$0")" && pwd)"
 
+# The systemd unit name. Also the [update_manager] section name it must match -
+# see the Moonraker block below for why those two are not independent.
+SERVICE_NAME="knomi_serial"
+
 EXTRA_PATH="$HOME/klipper/klippy/extras/knomi_serial.py"
 
 echo "Creating symbolic link to klippy_extras/knomi_serial.py at $EXTRA_PATH"
@@ -16,18 +20,13 @@ ln -sf "$REPO/klippy_extras/knomi_serial.py" "$EXTRA_PATH"
 # fi
 
 # ---------------------------------------------------------------------------
-# The watcher service, generated but not installed.
+# The watcher service.
 #
-# Generated because the paths in it are this machine's - where the repo is, who
-# Klipper runs as, which python. Hardcoding those was wrong and the failure was
-# quiet: systemd's ProtectHome plus a ReadWritePaths that does not exist starts
-# and then cannot write, which reads as "the watcher does nothing" rather than as
-# a path problem.
-#
-# Not installed because putting a unit in /etc/systemd/system needs root, and a
-# root-owned file that runs a script out of a git repo is a decision to make
-# deliberately rather than one an install script should make for you. Same
-# reason the udev rules in the README are not copied into place either.
+# The unit is generated rather than shipped because the paths in it are this
+# machine's - where the repo is, who Klipper runs as, which python. Hardcoding
+# those was wrong and the failure was quiet: systemd's ProtectHome alongside a
+# ReadWritePaths that does not exist starts cleanly and then cannot write, which
+# reads as "the watcher does nothing" rather than as a path problem.
 # ---------------------------------------------------------------------------
 
 DATA="$HOME/printer_data/knomi"
@@ -44,16 +43,41 @@ sed -e "s|@USER@|$USER|g" \
 
 echo
 echo "Wrote $UNIT for this machine."
-echo "The watcher is optional - see service/README.md for what it buys you."
-echo "Try it without installing anything:"
-echo
-echo "  python3 $REPO/service/knomi_serial_watch.py --once"
-echo
-echo "To run it as a service:"
-echo
-echo "  sudo cp $UNIT /etc/systemd/system/"
-echo "  sudo systemctl daemon-reload"
-echo "  sudo systemctl enable --now knomi_serial"
+
+# Installed if you already have it, or if you ask for it - never decided here.
+#
+# Unlike a Klipper module, a background daemon is not implied by installing
+# this repo. Most printers have one display, address it by device_id, and need
+# nothing watching anything. So the rule is that install.sh keeps the service up
+# to date, and does not decide to give you one: already installed means the unit
+# is refreshed and the service restarted, which is what makes this safe to run
+# from Moonraker's update manager after every pull.
+#
+# No prompt, deliberately. install_script runs non-interactively under the
+# update manager, and a read here would hang an update rather than ask anybody
+# anything.
+INSTALLED_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
+if [ "${1:-}" = "--watch" ] || [ -f "$INSTALLED_UNIT" ]; then
+    if [ -f "$INSTALLED_UNIT" ]; then
+        echo "Updating the $SERVICE_NAME service."
+    else
+        echo "Installing the $SERVICE_NAME service."
+    fi
+    sudo install -m 0644 -o root -g root "$UNIT" "$INSTALLED_UNIT"
+    sudo systemctl daemon-reload
+    sudo systemctl enable "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+    sudo systemctl restart "${SERVICE_NAME}.service"
+    echo "  $(systemctl is-active "${SERVICE_NAME}.service" || true) - systemctl status $SERVICE_NAME"
+else
+    echo "The watcher is optional - see service/README.md for what it buys you."
+    echo "Try it without installing anything:"
+    echo
+    echo "  python3 $REPO/service/knomi_serial_watch.py --once"
+    echo
+    echo "To install it as a service, re-run with --watch:"
+    echo
+    echo "  ./install.sh --watch"
+fi
 echo
 
 # ---------------------------------------------------------------------------
@@ -78,7 +102,6 @@ echo
 # make silently in somebody's live printer config.
 # ---------------------------------------------------------------------------
 
-SERVICE_NAME="knomi_serial"
 PRINTER_DATA="${PRINTER_DATA:-$HOME/printer_data}"
 ASVC="$PRINTER_DATA/moonraker.asvc"
 MOONRAKER_CONF="$PRINTER_DATA/config/moonraker.conf"

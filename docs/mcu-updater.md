@@ -46,14 +46,21 @@ Each entry also carries `section` with the full name as printer.cfg spells it,
 so nothing has to reconstruct it: prefixing the key is right for a named section
 and wrong for a bare one, which is the single-display case most people have.
 
-**This does not replace reading `configfile.settings`.** This map is built by the
-module, so if the module fails to load there is no `knomi_cluster` either and
-every display silently vanishes from the list — exactly the one you must not be
-blind to. Klipper parses the config before loading anything, so a section absent
-here but present in `configfile.settings` is a real and reportable state: the
-module did not come up.
+This map is complete whenever it is readable. Every configured section registers
+with the cluster as it is constructed, and a section that fails to construct
+takes all of Klipper with it — `_read_config()` runs inside the try in
+`klippy.py:_connect`, so a `config.error` sets an error state and returns before
+Klipper ever reports ready. There is no state where one display is missing from
+this map but Klipper is otherwise answering queries.
 
-Note also that `configfile.settings` lowercases its keys and this does not.
+Which also means a broken config does not show up here at all. It shows up as
+Klipper never becoming ready, with the reason in the state message Moonraker
+reports — including the two-sections-one-display refusal above. That is the
+place to look for it, not a gap in this list.
+
+`configfile.settings` remains useful for the options as written, and is free if
+you are already fetching it. Note it lowercases its section keys and this does
+not, so `section` above is the one that matches a printer object name.
 
 Prefer this whenever Klipper is running, for three reasons. It is **live** —
 `online` is derived from how recently the display actually reported, not from

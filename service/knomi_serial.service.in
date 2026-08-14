@@ -22,6 +22,11 @@ Group=@USER@
 # is developed on a filesystem with no exec bit, and a lost one here is a
 # 203/EXEC that only ever shows up on a printer.
 ExecStart=/bin/sh @REPO@/service/run.sh
+# Otherwise the journal tags every line `sh`, because systemd takes the
+# identifier from ExecStart's basename and never looks again - not even after
+# run.sh execs into python. Which makes `journalctl -t` useless and makes the
+# service look like it failed to exec when it did.
+SyslogIdentifier=knomi_serial
 Restart=always
 RestartSec=5
 

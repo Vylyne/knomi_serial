@@ -129,13 +129,26 @@ for want in serial:python3-serial pyudev:python3-pyudev; do
     if [ "$CAN_ROOT" = no ]; then
         echo "  not installing it - no root available"
         skipped "install $PKG"
-    elif $SUDO apt-get install -y "$PKG" >/dev/null 2>&1; then
+        continue
+    fi
+    # Said before apt runs, not after. It is the one slow thing in here - a
+    # minute is normal, longer if the package lists are stale - and announcing
+    # it only on success means a silent terminal for all of that, which reads
+    # as a hang rather than as work.
+    echo "  installing $PKG, which can take a minute..."
+    APT_LOG="$(mktemp)"
+    if $SUDO apt-get install -y "$PKG" > "$APT_LOG" 2>&1; then
         echo "  installed $PKG"
     else
-        echo "  could not install it. The watcher will not start until you run:"
+        # Shown rather than swallowed. "could not install it" on its own sends
+        # people to run the identical command by hand to find out why.
+        echo "  could not install it:"
+        tail -5 "$APT_LOG" | sed 's/^/    /'
+        echo "  the watcher will not start until this works:"
         echo "    sudo apt install $PKG"
         skipped "install $PKG"
     fi
+    rm -f "$APT_LOG"
 done
 
 # ---------------------------------------------------------------------------

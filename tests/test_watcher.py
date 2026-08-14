@@ -255,10 +255,15 @@ def cluster(path, printing=False, ident="19aa44"):
         "get_status": staticmethod(lambda e: {"state": state})})()
     c.reactor = type("R", (), {"monotonic": staticmethod(lambda: 100.0)})()
     d = k.Knomi_Serial.__new__(k.Knomi_Serial)
+    d.name = "knomi_serial T0_knomi"
     d.screen_name = "T0_knomi"
     d.config_serial = None
     d.config_device_id = ident
     d.resolved_port = None
+    # What _drop touches on its way out, so _verify_identity can be called.
+    d.serial = None
+    d.pending_cmd = b""
+    d.cluster = c
     c.devices.append(d)
     k._DEVICE_MAP_PATH = path
     # Any fall through to listening is a failure of the test's premise.
@@ -295,6 +300,25 @@ def test_a_map_that_proved_wrong_is_not_read_back_and_retried():
     check("tried once", c.resolve_port("19aa44"), "/dev/ttyUSB2")
     c.reject_port("19aa44", "/dev/ttyUSB2")
     check("not tried again", c.resolve_port("19aa44"), None)
+
+
+def test_the_wrong_display_answering_rejects_that_pairing():
+    """The path the anti-loop protection is actually reached by.
+
+    Rejecting through reject_port directly proves the set works; this proves
+    something calls it with a port. It did not: resolved_port was cleared on the
+    line above the call, so the pairing was never recorded and a stale map was
+    read back and retried on every reconnect - the exact loop the set exists to
+    stop.
+    """
+    path = temp()
+    w.save(path, {"19aa44": {"port": "/dev/ttyUSB2"}})
+    c = cluster(path, printing=True)
+    display = c.devices[0]
+    display.resolved_port = c.resolve_port("19aa44")
+    display._verify_identity("19aa45")
+    check("pairing remembered", c._rejected, {("19aa44", "/dev/ttyUSB2")})
+    check("not offered again", c.resolve_port("19aa44"), None)
 
 
 def test_the_same_display_on_a_new_port_is_a_fresh_answer():

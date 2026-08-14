@@ -228,6 +228,7 @@ def startup(devices, ports, printing=False):
     c.tools = {}
     c._ports = dict(ports)
     c._discover_after = 0
+    c._rejected = set()
     c.printer = type("P", (), {
         "config_error": staticmethod(lambda m: FakeConfigError(m))})()
     state = "printing" if printing else "standby"
@@ -325,6 +326,10 @@ def test_the_wrong_display_is_dropped_not_driven():
     check("dropped", d.serial, None)
     check("port forgotten", d.resolved_port, None)
     check("cache invalidated", d.cluster._ports, {})
+    # And the pairing is remembered, so the watcher's map cannot hand back the
+    # same wrong answer on the next pass.
+    check("pairing rejected", d.cluster._rejected,
+          {("19aa44", "/dev/ttyUSB0")})
 
 
 def test_a_serial_section_has_nothing_to_verify():

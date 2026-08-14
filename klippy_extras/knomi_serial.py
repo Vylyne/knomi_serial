@@ -1696,8 +1696,12 @@ class Knomi_Serial:
         # Both the section's answer and the row's cache were wrong, so neither
         # is worth keeping. The next pass re-reads the ports rather than
         # handing back the same mistake.
-        self.resolved_port = None
+        #
+        # Told before being forgotten, in that order: reject_port needs the port
+        # that just failed in order to remember the pairing, and clearing it
+        # first handed it None and quietly defeated the whole mechanism.
         self.cluster.reject_port(self.config_device_id, self.resolved_port)
+        self.resolved_port = None
 
     def _process_report(self, payload):
         fields = parse_report(payload)

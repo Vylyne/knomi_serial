@@ -93,6 +93,61 @@ The Klipper module is installed by running `install.sh` on the Klipper host. It
 symlinks rather than copies, so `git pull` updates the module too. Add a config
 section as below and restart Klipper.
 
+## Updating firmware
+
+The host side updates itself — `install.sh` symlinks, so `git pull` moves the
+Klipper module and the watcher with it. Only the firmware needs writing to a
+device, and the awkward part of writing it is not the flash, it is naming which
+display to flash.
+
+**[mcu-updater](https://github.com/Vylyne/mcu-updater) is the recommended way**,
+because it addresses displays the same way everything else here does: by the
+six-hex-character id burned into the chip, resolved to a port *at flash time*.
+Flashing by remembered path is the failure this repo exists to avoid —
+`/dev/ttyUSB0` moves between reboots, and on a toolchanger the display that
+answers to it today is not reliably the one that did yesterday. Reflashing T3
+because the ports renumbered is a quiet failure: both displays come back up,
+both work, and the wrong one is running the wrong build.
+
+It reads the three sources described in
+[docs/mcu-updater.md](docs/mcu-updater.md) — Klipper if it is up, the watcher's
+map if it is not, a live scan immediately before writing — and refuses rather
+than guesses when they disagree.
+
+Failing that, from a checkout, with the id resolved by hand:
+
+```sh
+sudo systemctl stop klipper knomi_serial
+python scripts/discover.py                    # which id is on which port
+pio run -e knomi -t upload --upload-port /dev/ttyUSB0
+sudo systemctl start knomi_serial klipper
+```
+
+Stopping Klipper is not optional: it holds its ports under an advisory `flock`
+that esptool also takes, so the upload fails outright otherwise.
+
+### From a published image
+
+Every `v*` tag builds a **single merged image** — bootloader, partition table,
+`boot_app0` and the app in one file — attached to its
+[release](https://github.com/Vylyne/knomi_serial/releases). It flashes at one
+offset, so there are no offsets to get wrong:
+
+```sh
+esptool --chip esp32s3 -p /dev/ttyUSB0 write_flash 0x0 knomi-0.6.0.bin
+```
+
+This is for hardware that has never had a toolchain pointed at it — a display
+out of the box, or a recovery from a bad flash. For a working printer, prefer
+either route above: they check which display they are writing to, and this does
+not. Each release also carries a `manifest.json`, which is what a browser-based
+[ESP Web Tools](https://esphome.github.io/esp-web-tools/) flasher reads to write
+the same image over WebSerial with nothing installed at all.
+
+A tag whose `VERSION` file disagrees with it fails the release build rather than
+publishing, so a downloaded image always reports the version on the tin — see
+[Versioning](#versioning).
+
 ## Klipper configuration
 
 ```ini
@@ -505,7 +560,23 @@ metadata when the tree is not a clean release build:
 The Klipper module reads the same `VERSION` file, which works because
 `install.sh` symlinks it into `klippy/extras` rather than copying it.
 
-To cut a release: bump `VERSION`, commit, then `git tag -a v0.4.0 -m 0.4.0`.
+To cut a release: bump `VERSION`, commit, then `git tag -a v0.6.0 -m 0.6.0` and
+push the tag. `.github/workflows/release.yml` builds the merged image and
+publishes it as a GitHub release.
+
+The tag is the only thing that decides this, and it has to be — a build on
+`main` is not a release build unless `main` is *sitting on* the tag, and gating
+on the branch would publish an asset whose own version string reads
+`0.6.0+85.g2892739`. Anything comparing versions, including
+[mcu-updater](https://github.com/Vylyne/mcu-updater), treats build metadata as
+"not a release", so that asset would contradict the release carrying it. The
+workflow refuses to publish when `VERSION` and the tag disagree.
+
+Semver already says which kind of release a tag is, so nothing is passed by
+hand: a hyphen makes it a prerelease. `v0.7.0` is published as latest,
+`v0.7.0-rc1` as a prerelease — with `VERSION` set to `0.7.0-rc1` to match, since
+the check compares them literally.
+
 Moonraker's update manager infers the repo version from that tag on its own — it
 needs at least one tag in `vX.Y.Z` form, and no manifest file in this repo.
 Comparing the tag Moonraker reports against `firmware_version` above is what

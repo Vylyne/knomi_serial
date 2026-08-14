@@ -73,4 +73,19 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
       - run: pip install platformio
-      - run: pio run -e knomi
+      # `-t mergebin` builds and then merges. Merging here rather than only on a
+      # tag means the release path is exercised on every push - otherwise the
+      # first time it runs is during a release, where a failure means the tag is
+      # already pushed and the version already bumped.
+      - run: pio run -e knomi -t mergebin
+      # Not a release, and deliberately not published as one: a prerelease per
+      # push would be a release entry per commit. An artifact expires on its own
+      # and is enough to test-flash a build before deciding to tag it.
+      - name: Keep the merged image
+        uses: actions/upload-artifact@v4
+        with:
+          name: knomi-firmware-${{ github.sha }}
+          path: |
+            .pio/build/knomi/knomi-*.bin
+            .pio/build/knomi/manifest.json
+          retention-days: 14

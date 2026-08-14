@@ -22,10 +22,11 @@ select = [
 ]
 
 [lint.per-file-ignores]
-# A PlatformIO extra_script. SCons injects `Import` and `env` into the module's
+# PlatformIO extra_scripts. SCons injects `Import` and `env` into the module's
 # namespace before running it, so every reference to them is undefined as far as
 # static analysis can tell, and correct as far as the build is concerned.
 "scripts/version.py" = ["F821"]
+"scripts/merge_bin.py" = ["F821"]
 
 # The Klipper module reaches into printer objects that only exist at runtime and
 # catches broadly on purpose: a display throwing must never take the print with

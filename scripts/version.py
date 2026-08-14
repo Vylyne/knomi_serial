@@ -71,6 +71,11 @@ variant = env["PIOENV"]
 
 print(f"knomi-serial: firmware version {version} ({variant})")
 
+# Stashed unstringified so a later script can name a file after it.
+# scripts/merge_bin.py needs the same answer, and re-deriving it there would be
+# a second copy of the rules above, free to drift from this one.
+env["KNOMI_VERSION"] = version
+
 env.Append(
     CPPDEFINES=[
         ("KNOMI_FW_VERSION", env.StringifyMacro(version)),

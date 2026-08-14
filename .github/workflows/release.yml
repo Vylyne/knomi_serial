@@ -1,0 +1,85 @@
+name: Release
+
+# Tags, not branches. `scripts/version.py` reports a bare version only for a
+# clean tree sitting on `v<VERSION>`, so the tag is the only thing that decides
+# whether a build is a release - a branch cannot, and gating on `main` would
+# publish assets whose own version string says they are dev builds.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # version.py describes against tags, and a shallow clone has none.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # A tag whose VERSION file disagrees still builds, and produces firmware
+      # reporting `0.5.0+85.g2892739` under a release called v0.6.0. Per
+      # docs/mcu-updater.md, build metadata means "not a release" to anything
+      # deciding whether to flash - so the asset would contradict the release
+      # carrying it. Cheaper to refuse than to publish and retract.
+      - name: Check VERSION agrees with the tag
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have="$(cat VERSION)"
+          if [ "$want" != "$have" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} needs VERSION ${want}, file says ${have}"
+            exit 1
+          fi
+          echo "VERSION ${have} matches ${GITHUB_REF_NAME}"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+
+      - run: pip install platformio
+
+      - name: Build the merged image
+        run: pio run -e knomi -t mergebin
+
+      # merge_bin names the image from the version compiled into the firmware,
+      # so the file existing under this name is proof the binary reports the
+      # tag rather than an inference that it should.
+      - name: Confirm the image reports the tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          image=".pio/build/knomi/knomi-${version}.bin"
+          test -f "$image" || { echo "::error::no ${image}"; exit 1; }
+          ls -l "$image" .pio/build/knomi/manifest.json
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dir=".pio/build/knomi"
+          # Semver spells a prerelease with a hyphen - v0.7.0-rc1 - so the tag
+          # already says which kind it is and nothing has to be passed by hand.
+          case "$GITHUB_REF_NAME" in
+            *-*) flag=--prerelease ;;
+            *)   flag=--latest ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "$flag" \
+            "${dir}/knomi-${version}.bin" \
+            "${dir}/manifest.json"

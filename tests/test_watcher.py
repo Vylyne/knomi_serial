@@ -127,6 +127,54 @@ def test_a_busy_port_comes_back_sooner_than_a_silent_one():
     check("retried sooner", obj.next_deadline(), w.RETRY_BUSY)
 
 
+def test_a_port_klipper_is_holding_is_never_listened_to():
+    """It cannot be, and finding that out by trying costs a log line each time.
+
+    Which on a working printer is every display, every attempt, for as long as
+    the printer is up - and the answer cannot change while Klipper holds it,
+    because Klipper holding it is what makes the identity available elsewhere.
+    """
+    path = temp()
+    obj = watcher(path, ["/dev/ttyUSB0"], {"/dev/ttyUSB0": "19aa44"})
+    w._openable = lambda port: False
+    asked = []
+    obj._identify = lambda port: asked.append(port) or None
+    obj.tick()
+    check("not listened to", asked, [])
+
+
+def test_a_port_that_keeps_refusing_is_asked_less_and_less():
+    """Otherwise it is two lines a minute forever for a settled situation."""
+    path = temp()
+    obj = watcher(path, ["/dev/ttyUSB0"], {})
+    w._openable = lambda port: False
+    waits = []
+    for _ in range(8):
+        obj.tick()
+        waits.append(obj.next_deadline())
+        obj.clock.t += waits[-1]
+    check("doubling", waits[:3], [w.RETRY_BUSY, w.RETRY_BUSY * 2,
+                                  w.RETRY_BUSY * 4])
+    check("and then held", waits[-1], w.RETRY_CAP)
+
+
+def test_an_event_makes_a_refused_port_worth_asking_again():
+    """What lets the wait grow to a quarter of an hour without going deaf.
+
+    A backoff is earned under conditions that a plug or an unplug has just
+    changed, so it should not outlive them.
+    """
+    path = temp()
+    obj = watcher(path, ["/dev/ttyUSB0"], {})
+    w._openable = lambda port: False
+    obj.tick()
+    obj.clock.t += w.RETRY_BUSY
+    obj.tick()
+    check("backed off", obj.next_deadline() > w.RETRY_BUSY, True)
+    obj.forget_backoff()
+    check("asked at once", obj.next_deadline(), None)
+
+
 class Monitor:
     """Enough of pyudev's Monitor to drive PortEvents without a kernel."""
 

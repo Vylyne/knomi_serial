@@ -237,9 +237,26 @@ It never holds a port. It takes the same `flock` that Klipper's sections and
 `esptool` take, so a port being driven or flashed is skipped rather than
 disturbed, and it listens only long enough to read one report.
 
-Ports that answer nothing are left alone for two minutes — most likely something
-on the printer that is not a display, and re-opening a stranger's serial port
-every time anything on the machine is plugged in would be rude and pointless.
-Ports that were busy are
-retried sooner, at thirty seconds, since they will free up eventually and their
-identity is worth having when they do.
+A port it cannot open is not listened to at all — it cannot be, and finding that
+out by trying means opening it twice and logging the refusal on the way past.
+Usually that port is a display Klipper is driving, and that is the one case
+where asking is pointless by construction: **Klipper holds the ports it knows
+about, so anything it holds is already answerable from
+`printer.knomi_cluster.devices`.** That is the top-left cell of the table above,
+and this service is not on that side of it. Asking anyway is this process doing
+Klipper's half of the split, failing, and saying so — twice a minute, per
+display, for as long as the printer is up.
+
+So a port that refuses is asked again after thirty seconds, then a minute, then
+two, up to a quarter of an hour, and is announced once rather than on every
+attempt. That is safe to grow that far because **any event clears it**: a plug,
+an unplug, a hub repowered — anything arriving over netlink means the machine is
+not what it was when that port last refused, and every backoff is dropped. The
+only thing left waiting is a port freed *without* re-enumerating, which in
+practice means Klipper being stopped, and the consumer that cares about that
+case runs its own discovery pass before flashing anything.
+
+Ports that answer nothing back off the same way, starting at two minutes rather
+than thirty seconds — most likely something on the printer that is not a display
+at all, and re-opening a stranger's serial port every time anything on the
+machine is plugged in would be rude and pointless.

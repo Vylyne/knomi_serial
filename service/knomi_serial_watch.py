@@ -65,9 +65,24 @@ LISTEN = 5.0
 RETRY_UNKNOWN = 120.0
 
 #: A port that could not be opened is somebody else's right now: a Klipper
-#: section, or a flashing tool. Worth trying again sooner than an unknown one,
-#: because it will be free eventually and its identity is worth having then.
+#: section, or a flashing tool. First retry after this long, then doubling.
 RETRY_BUSY = 30.0
+
+#: How long a wait can grow to. Reached after a few doublings, and then held.
+#:
+#: A busy port is usually a display Klipper is driving, and that is the one case
+#: where asking is pointless by construction: Klipper holds the ports it knows
+#: about, so anything it holds is already answerable from
+#: printer.knomi_cluster.devices. That is the whole split this service exists on
+#: one side of. Retrying it every thirty seconds for the life of the printer is
+#: this process doing Klipper's half of the table, failing, and saying so.
+#:
+#: What makes a long wait safe is that nothing needs the answer promptly.
+#: Anything that physically changes arrives as an event and clears the wait (see
+#: forget_backoff). The only thing left is a port freed without re-enumerating -
+#: Klipper being stopped - and the consumer that cares about that case, a
+#: firmware updater, runs its own discovery pass before flashing anything.
+RETRY_CAP = 900.0
 
 
 def load(path):
@@ -121,6 +136,40 @@ class Watcher:
         self.confirmed = set()
         #: Ports not worth asking again yet, and when that changes.
         self.quiet_until = {}
+        #: How many times each has refused, which is what the wait doubles on.
+        self.refusals = {}
+        #: What each was last deferred for, so a port that has been busy since
+        #: this started is not announced as busy again every time it is checked.
+        self.reason = {}
+
+    def _defer(self, port, now, base):
+        """Not this one, not yet - and each time, for longer.
+
+        Said once. A port whose situation has not changed has nothing new to
+        report, and the alternative is two lines a minute for every display the
+        printer is driving, forever, which is most of them.
+        """
+        n = self.refusals.get(port, 0)
+        self.refusals[port] = n + 1
+        wait = min(base * (2 ** n), RETRY_CAP)
+        self.quiet_until[port] = now + wait
+        why = "busy" if base == RETRY_BUSY else "silent"
+        if self.reason.get(port) != why:
+            self.reason[port] = why
+            logging.info(
+                "%s is %s - asking again in %gs, then less often", port, why,
+                wait)
+
+    def forget_backoff(self):
+        """Something changed on the bus, so every refusal is worth re-testing.
+
+        This is what lets the wait above grow to a quarter of an hour without
+        the service becoming slow to react. A port unplugged and plugged back
+        in, a hub repowered, anything at all arriving over netlink means the
+        machine is not what it was when a port last refused.
+        """
+        self.quiet_until.clear()
+        self.refusals.clear()
 
     def _identify(self, port):
         """Ask one port who is on it. Returns an (id, fields) pair or None."""
@@ -147,24 +196,31 @@ class Watcher:
             ident: fields for ident, fields in self.devices.items()
             if fields.get("port") in present
         }
-        for port in list(self.quiet_until):
-            if port not in present:
-                del self.quiet_until[port]
+        for gone in [p for p in self.quiet_until if p not in present]:
+            del self.quiet_until[gone]
+            self.refusals.pop(gone, None)
+            self.reason.pop(gone, None)
         self.confirmed &= present
 
         for port in sorted(present - self.confirmed):
             if now < self.quiet_until.get(port, 0):
                 continue
+            # Asked before listened to, in that order. A port somebody else
+            # holds cannot be listened to at all, so going the other way round
+            # means opening it twice to find that out - and discover_reports
+            # logs the refusal on its way past, which on a running printer is a
+            # line per display per attempt for as long as the printer is up.
+            if not _openable(port):
+                self._defer(port, now, RETRY_BUSY)
+                continue
             got = self._identify(port)
             if got is None:
-                # Either nothing answered or the port belongs to someone else.
-                # Told apart only to pick how long to wait before asking again.
-                busy = not _openable(port)
-                self.quiet_until[port] = now + (
-                    RETRY_BUSY if busy else RETRY_UNKNOWN)
+                self._defer(port, now, RETRY_UNKNOWN)
                 continue
             ident, fields = got
             self.quiet_until.pop(port, None)
+            self.refusals.pop(port, None)
+            self.reason.pop(port, None)
             self.confirmed.add(port)
             # Whatever used to be recorded here is not here now. Without this a
             # swap leaves both displays claiming the port, and which one a
@@ -296,9 +352,13 @@ def main():
                               for i, f in sorted(w.devices.items())) or "empty")
         except Exception as e:
             logging.warning("pass failed: %s", e)
-        # An event and a deadline both mean the same thing - take a snapshot -
-        # which is why tick() needs to know about neither.
-        events.wait(w.next_deadline())
+        # An event and a deadline both mean the same thing - take a snapshot.
+        # They differ in one respect only: an event says the machine changed,
+        # and a port that refused the last time it was asked deserves asking
+        # again on that basis rather than waiting out a backoff earned under
+        # conditions that no longer hold.
+        if events.wait(w.next_deadline()):
+            w.forget_backoff()
 
 
 if __name__ == "__main__":

@@ -40,6 +40,34 @@ to be current, and lets the screen sleep on its normal timers again.
 
 <br clear="right">
 
+## Contents
+
+- [Using it](#using-it)
+- [Scope, and what is finished](#scope-and-what-is-finished)
+- [Installation](#installation)
+- [Updating firmware](#updating-firmware)
+  - [From a published image](#from-a-published-image)
+- [Klipper configuration](#klipper-configuration)
+  - [Which display is which](#which-display-is-which)
+  - [More than one screen](#more-than-one-screen)
+  - [Appearance and sleep](#appearance-and-sleep)
+- [The corner keys](#the-corner-keys)
+- [Telling the screens about the job](#telling-the-screens-about-the-job)
+  - [When a screen stays awake](#when-a-screen-stays-awake)
+- [Status reference](#status-reference)
+- [Testing the display without printing](#testing-the-display-without-printing)
+  - [Screenshots](#screenshots)
+  - [Checks](#checks)
+- [Versioning](#versioning)
+  - [Moonraker](#moonraker)
+- [Acknowledgements](#acknowledgements)
+
+Three documents sit outside this one:
+[docs/protocol.md](docs/protocol.md) for the wire format,
+[docs/mcu-updater.md](docs/mcu-updater.md) for what a flashing tool needs from
+this repo, and [docs/hardware.md](docs/hardware.md) for the pin map.
+[service/README.md](service/README.md) covers the watcher.
+
 ## Using it
 
 The idle screen is a row of pages you **swipe** between horizontally. Which

@@ -13,11 +13,26 @@ Type=simple
 # access to the serial ports.
 User=@USER@
 Group=@USER@
-ExecStart=@PYTHON@ @REPO@/service/knomi_serial_watch.py --out @DATA@/devices.json
+# Through service/run.sh rather than straight at python, because this file can
+# only be rewritten by install.sh with root, while run.sh is updated by the same
+# `git pull` that updates everything else. Anything about how the watcher starts
+# that might change later belongs there, not here.
+#
+# Invoked via /bin/sh rather than relying on run.sh being executable: the repo
+# is developed on a filesystem with no exec bit, and a lost one here is a
+# 203/EXEC that only ever shows up on a printer.
+ExecStart=/bin/sh @REPO@/service/run.sh
 Restart=always
 RestartSec=5
 
 # It reads serial ports and writes one file. Nothing else is needed.
+#
+# Do not add PrivateNetwork=yes or a RestrictAddressFamilies= without
+# AF_NETLINK. The watcher learns about ports from udev over a netlink socket,
+# and either of those leaves it starting cleanly and then never hearing an
+# event again - a silent failure of the same shape as the ReadWritePaths one
+# install.sh warns about. ProtectSystem=strict is fine: it leaves /dev, /proc
+# and /sys alone, and uevent multicast needs no privilege.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

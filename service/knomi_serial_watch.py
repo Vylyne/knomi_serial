@@ -6,9 +6,9 @@ not running - which is exactly when the question matters most, because flashing
 a display requires the port to be free. So the answer cannot live only in
 Klipper.
 
-This watches for serial ports appearing and disappearing, identifies anything
-new that is not already spoken for, and writes what it learns to a file that
-Klipper and a firmware updater can both read:
+This listens to udev for serial ports appearing and disappearing, identifies
+anything new that is not already spoken for, and writes what it learns to a file
+that Klipper and a firmware updater can both read:
 
     {"version": 1,
      "devices": {"19aa44": {"port": "/dev/ttyUSB0",
@@ -52,12 +52,6 @@ import knomi_serial as k  # noqa: E402
 FORMAT_VERSION = 1
 
 DEFAULT_PATH = os.path.expanduser("~/printer_data/knomi/devices.json")
-
-#: How often to ask which ports exist. This is a sysfs read costing well under a
-#: millisecond and opens nothing, so the loop is idle almost all of the time -
-#: the expensive operation is identifying a port, and that happens only when one
-#: appears.
-POLL_PERIOD = 1.0
 
 #: How long to listen to a port that has just appeared. Longer than the
 #: two-second report period because a freshly enumerated board has to boot
@@ -189,6 +183,68 @@ class Watcher:
             save(self.path, self.devices)
         return changed
 
+    def next_deadline(self):
+        """Seconds until the earliest port worth retrying, or None for never.
+
+        Ports appearing and going away arrive as events, so the only thing left
+        needing a clock is a port that answered nothing or was busy - those are
+        deliberately not asked again for a while, and nothing will wake us when
+        that while is up.
+        """
+        if not self.quiet_until:
+            return None
+        return max(0.0, min(self.quiet_until.values()) - self.now())
+
+
+class PortEvents:
+    """Blocks until the kernel says a tty appeared or went away.
+
+    The alternative is asking once a second, which is a sysfs walk and a wakeup
+    per second forever to answer "no" almost every time. This is the same
+    question asked the other way round.
+    """
+
+    def __init__(self):
+        # Imported here rather than at module scope because --once never waits
+        # for an event, and service/README.md tells people to run that before
+        # installing anything at all.
+        import pyudev
+
+        # from_netlink defaults to the "udev" source rather than "kernel",
+        # which matters: the udev event arrives after udevd has created
+        # /dev/ttyUSB*, and a tick opens the port immediately. The kernel event
+        # would race the device node into existence.
+        self._monitor = pyudev.Monitor.from_netlink(pyudev.Context())
+        # Filtering before start() installs it in the kernel, so a boot's worth
+        # of unrelated uevents never reaches this process at all.
+        #
+        # The whole tty subsystem rather than ttyUSB, on two counts. The filter
+        # matches SUBSYSTEM and DEVTYPE, and tty devices carry no DEVTYPE, so
+        # there is nothing there to narrow with - it would have to be a check on
+        # the device node after the wakeup, which saves the tick and not the
+        # wake. And it would be wrong: a 303A board is the ESP32 as the USB
+        # device itself, which enumerates as ttyACM rather than ttyUSB, so
+        # matching on ttyUSB would quietly stop noticing half of _USB_VENDORS.
+        #
+        # The cost of a tty event that is not ours is one tick - a sysfs walk
+        # that finds nothing new. That is what the old loop paid every second.
+        self._monitor.filter_by(subsystem="tty")
+        self._monitor.start()
+
+    def wait(self, timeout):
+        """True if something changed, False if the timeout ran out first."""
+        if self._monitor.poll(timeout=timeout) is None:
+            return False
+        # A hub powering up delivers an event per port, and each port delivers
+        # more than one. A tick is a snapshot of everything, so draining the
+        # burst here means one pass answers all of it.
+        while self._monitor.poll(timeout=0) is not None:
+            pass
+        return True
+
+    # No filter on the action. add, remove, change and bind all mean "look
+    # again", and telling them apart would only create a way to miss one.
+
 
 def _openable(port):
     """Whether the port is free, to tell 'busy' from 'not a display'."""
@@ -206,8 +262,6 @@ def main():
                    help=f"where to write the map (default {DEFAULT_PATH})")
     p.add_argument("--listen", type=float, default=LISTEN,
                    help="seconds to wait for a new port to announce itself")
-    p.add_argument("--period", type=float, default=POLL_PERIOD,
-                   help="seconds between checks for ports appearing")
     p.add_argument("--once", action="store_true",
                    help="one pass, print the result, exit")
     args = p.parse_args()
@@ -223,6 +277,15 @@ def main():
         sys.stdout.write("\n")
         return 0
 
+    # Subscribed before the first pass, deliberately. Identifying a port takes
+    # seconds, and a display plugged in during that first pass would otherwise
+    # happen entirely in the gap between looking and listening. Subscribing
+    # first means the event waits on the socket instead.
+    try:
+        events = PortEvents()
+    except ImportError:
+        return "pyudev is not installed. sudo apt install python3-pyudev"
+
     logging.info("watching for displays, writing %s", args.out)
     while True:
         try:
@@ -233,7 +296,9 @@ def main():
                               for i, f in sorted(w.devices.items())) or "empty")
         except Exception as e:
             logging.warning("pass failed: %s", e)
-        time.sleep(args.period)
+        # An event and a deadline both mean the same thing - take a snapshot -
+        # which is why tick() needs to know about neither.
+        events.wait(w.next_deadline())
 
 
 if __name__ == "__main__":

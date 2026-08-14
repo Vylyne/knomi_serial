@@ -196,6 +196,50 @@ def port_map(path=None):
     }
 
 
+#: What install.sh stamps when it finishes, and what the checkout expects it to
+#: have stamped. A Moonraker update moves files and restarts services; it never
+#: runs install.sh, and cannot - the systemd unit and the [update_manager]
+#: section both need doing from outside a `git pull`. So the checkout can end up
+#: newer than the install, with nothing to say so.
+_INSTALL_VERSION_PATH = os.path.expanduser(
+    "~/printer_data/knomi/.install-version")
+_INSTALL_VERSION_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+    "scripts", "install-version")
+
+
+def _install_version(path):
+    """The number in a stamp file, or 0 for anything else.
+
+    Missing, empty, half-written, or full of something that is not a number all
+    mean the same thing here: nothing has told us this install is current, so
+    assume it is not. Never raises - it is read on the way into a print.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def install_version_notice(wanted, stamped):
+    """What to tell the user when their install is behind the checkout.
+
+    Only when the checkout is ahead. A stamp higher than the repo means the
+    checkout was rolled back, and "re-run install.sh" is not the useful thing to
+    say about that.
+    """
+    if stamped >= wanted:
+        return None
+    where = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    if not os.path.isdir(os.path.join(where, ".git")):
+        # Copied into klippy/extras instead of symlinked, so this path is not a
+        # checkout and printing it would send somebody to the wrong directory.
+        where = "your knomi_serial checkout"
+    return (f"knomi_serial: this printer was set up by an older install.sh. "
+            f"Run ./install.sh in {where} to bring it up to date.")
+
+
 #: USB vendor ids worth listening to. 1A86 is the CH340 on the Knomi V2; 303A is
 #: Espressif's own, for boards whose ESP32 is the USB device directly.
 _USB_VENDORS = (0x1A86, 0x303A)
@@ -932,6 +976,19 @@ class KnomiCluster:
 
         self.reactor.register_timer(self._handle_update, self.reactor.NOW)
         self.reactor.register_timer(self._handle_read, self.reactor.NOW)
+
+        # On the cluster rather than on a section, so a row of six displays says
+        # this once. Said to the console rather than only to klippy.log, because
+        # the whole failure being described is one that otherwise announces
+        # itself as nothing at all - and said as information rather than raised
+        # as a config error, because a stale install is "please run this", not a
+        # reason to refuse to start a printer.
+        notice = install_version_notice(
+            _install_version(_INSTALL_VERSION_FILE),
+            _install_version(_INSTALL_VERSION_PATH),
+        )
+        if notice:
+            self.gcode.respond_info(notice)
 
     def _handle_update(self, eventtime):
         try:

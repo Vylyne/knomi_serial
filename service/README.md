@@ -1,9 +1,20 @@
 # The watcher service
 
-**Optional.** Nothing needs it. One display and a `device_id:` line works
-without it, and Klipper falls back to discovering the row itself whenever the
-map is missing, stale in a way it notices, or written by a version it does not
-recognise.
+**Installed by default, and `--no-watch` declines it.** Nothing strictly needs
+it — one display and a `device_id:` line works without it, and Klipper falls back
+to discovering the row itself whenever the map is missing, stale in a way it
+notices, or written by a version it does not recognise.
+
+It used to be opt-in, on two arguments. One was cost: it asked sysfs which ports
+existed once a second, forever, and most printers have one display and need
+nothing watching anything. That argument is gone — it blocks on a udev socket
+now and wakes when the kernel says something changed, which is not a thing a
+printer notices. The other was principle, that a daemon should not be implied by
+installing a repo, and that one survives as the flag.
+
+What changed on the other side is that the map got more load-bearing than it was
+when this was written: reconnecting a display mid-print reads it, and flashing
+one with Klipper stopped has no other source.
 
 It exists for the things Klipper structurally cannot do, all of which come from
 one fact: **a port can only be read by one program at a time, and Klipper holds
@@ -38,41 +49,49 @@ Try it first without installing anything:
 python3 service/knomi_serial_watch.py --once
 ```
 
-One pass, prints the map, exits. Then, if you want it running:
+One pass, prints the map, exits — and it needs no pyudev, which is why that
+import is deferred. Then:
 
 ```sh
-./install.sh --watch
+./install.sh
 ```
 
 `install.sh` generates the unit with this machine's paths already in it — where
-the repo is, who Klipper runs as, which python — then installs, enables and
-starts it.
+the repo is, who Klipper runs as, where `printer_data` is — then installs,
+enables and starts it.
 
-**`install.sh` never changes whether you are running this.** It refreshes what
-is there; it does not decide anything:
+**`install.sh` decides whether you are *given* one, not whether you are running
+one.** A unit that is already there is refreshed either way:
 
-| before | `./install.sh` | `./install.sh --watch` |
+| before | `./install.sh` | `./install.sh --no-watch` |
 | --- | --- | --- |
-| not installed | says how, installs nothing | installs, enables, starts |
+| not installed | installs, enables, starts | nothing |
 | installed, running | unit refreshed, restarted | same |
 | installed, stopped | unit refreshed, **left stopped** | same |
 
-Both halves of that matter. A daemon is not implied by installing this repo —
-most printers have one display, address it by `device_id`, and need nothing
-watching anything. And a service you stopped on purpose stays stopped: a plain
-`systemctl restart` would start it again, and `enable` would undo a deliberate
-`disable`, which is not an update's business.
+That second half matters: a service you stopped on purpose stays stopped. A
+plain `systemctl restart` would start it again, and `enable` would undo a
+deliberate `disable`, which is not an update's business.
 
-Moonraker updates do not run this script — `install_script:` is read for
-dependency lines, never executed. They do not need to: `ExecStart` points at the
-copy in the repo, so `git pull` updates the watcher's code in place and
-`managed_services: knomi_serial` restarts it into the new version. Re-run
-`install.sh` only when the *unit* needs rebuilding, which means when a path in
-it changed.
+**`--no-watch` is remembered**, in `~/printer_data/knomi/.no-watch`:
 
-There is no prompt, deliberately. `install_script` runs non-interactively under
-the update manager, and a prompt there would hang an update rather than ask
-anyone anything.
+| | no unit installed | unit installed |
+| --- | --- | --- |
+| `./install.sh`, no marker | installs, enables, starts | refreshed |
+| `./install.sh`, marker present | declines, and says how | refreshed |
+| `./install.sh --no-watch` | declines, writes the marker | refreshed |
+| `./install.sh --watch` | installs, removes the marker | refreshed |
+
+It has to be remembered, because the notice about a stale install tells you to
+run `./install.sh` for reasons that have nothing to do with the watcher. Without
+the marker, following that instruction would quietly hand you a daemon you had
+turned down. Deleting the file is a valid way to change your mind, and
+`--watch` is the tidy way.
+
+There is no prompt anywhere, deliberately, so that running this from something
+without a terminal cannot hang waiting for an answer. `--no-root` is there for
+the same kind of reason: it skips anything needing root instead of asking for
+it, reports what it skipped, and does not record the install as complete.
 
 To remove it:
 
@@ -80,7 +99,39 @@ To remove it:
 sudo systemctl disable --now knomi_serial
 sudo rm /etc/systemd/system/knomi_serial.service
 sudo systemctl daemon-reload
+./install.sh --no-watch
 ```
+
+That last line is the one people forget. Installing is the default now, so
+without the marker the next `./install.sh` puts it straight back.
+
+## Updates, and what an update cannot do
+
+A Moonraker update of a `git_repo` does three things: moves files with git,
+installs the packages named in `system_dependencies`, and restarts the services
+named in `managed_services`. There is no post-update hook — `install_script:` is
+read as text and scraped for dependency lines, never executed.
+
+Mostly that is enough. The Klipper module is a symlink into the repo, so `git
+pull` updates it where it stands. The watcher is launched by `service/run.sh`,
+which is also in the repo, so how it starts updates the same way and
+`managed_services: knomi_serial` restarts it into the new version. Everything
+that might need to change is deliberately on that side of the line.
+
+What an update cannot touch is `/etc/systemd/system/knomi_serial.service`. It
+needs root, so git cannot write it, and only `install.sh` does. The same goes
+for the `[update_manager]` section itself. So `install.sh` stamps a number into
+`~/printer_data/knomi/.install-version` when it finishes, and both Klipper and
+the watcher compare it against `scripts/install-version` in the checkout:
+
+- Klipper says so in the console at startup — not a config error, because a
+  stale install is "please run this", not a reason to refuse to start a printer.
+- The watcher says so as its first line in `journalctl -u knomi_serial`, for the
+  printer where Klipper is not running.
+
+A run that could not finish — no root available, a package it could not install
+— does not write the stamp. Which means the notice keeps appearing until someone
+runs it properly, rather than a half-done install quietly claiming to be current.
 
 ## The file
 
@@ -157,9 +208,13 @@ it is the reason this component is allowed to exist.
 
 ## What it does
 
-Once a second it asks which serial ports are present — a sysfs read costing
-well under a millisecond, which opens nothing. Almost always the answer is the
-same as last time and it goes back to sleep.
+It blocks on udev's netlink socket, and the kernel wakes it when a tty appears
+or goes away. Nothing at all happens in between — no timer, no wakeup, no sysfs
+walk on a loop to answer "same as last time" once a second.
+
+The one thing left on a clock is the backoff below: nothing sends an event when
+a two-minute wait is up, so the block has a timeout set to whenever that is, and
+running out of it means the same thing as an event — take a fresh snapshot.
 
 When a port **appears**, and it has not been identified *during this run*, it
 listens for a few seconds and records whatever announces itself. When a port
@@ -183,7 +238,8 @@ It never holds a port. It takes the same `flock` that Klipper's sections and
 disturbed, and it listens only long enough to read one report.
 
 Ports that answer nothing are left alone for two minutes — most likely something
-on the printer that is not a display, and holding a stranger's serial port open
-on a one-second loop would be rude and pointless. Ports that were busy are
+on the printer that is not a display, and re-opening a stranger's serial port
+every time anything on the machine is plugged in would be rude and pointless.
+Ports that were busy are
 retried sooner, at thirty seconds, since they will free up eventually and their
 identity is worth having when they do.

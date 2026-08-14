@@ -102,6 +102,63 @@ def test_a_port_already_identified_is_left_alone():
     check("not re-asked", asked, [])
 
 
+def test_nothing_pending_waits_for_an_event():
+    """No deadline means block on the socket rather than wake up to do nothing."""
+    path = temp()
+    obj = watcher(path, ["/dev/ttyUSB0"], {"/dev/ttyUSB0": "19aa44"})
+    obj.tick()
+    check("no deadline", obj.next_deadline(), None)
+
+
+def test_a_silent_port_is_the_only_thing_left_needing_a_clock():
+    """Nothing sends an event when a backoff expires, so it has to be timed."""
+    path = temp()
+    obj = watcher(path, ["/dev/ttyUSB0"], {})
+    obj.tick()
+    check("retried later", obj.next_deadline(), w.RETRY_UNKNOWN)
+
+
+def test_a_busy_port_comes_back_sooner_than_a_silent_one():
+    """It will be free eventually, and its identity is worth having then."""
+    path = temp()
+    obj = watcher(path, ["/dev/ttyUSB0"], {})
+    w._openable = lambda port: False
+    obj.tick()
+    check("retried sooner", obj.next_deadline(), w.RETRY_BUSY)
+
+
+class Monitor:
+    """Enough of pyudev's Monitor to drive PortEvents without a kernel."""
+
+    def __init__(self, events):
+        self.events = list(events)
+        self.polls = []
+
+    def poll(self, timeout=None):
+        self.polls.append(timeout)
+        return self.events.pop(0) if self.events else None
+
+
+def events(queued):
+    obj = w.PortEvents.__new__(w.PortEvents)
+    obj._monitor = Monitor(queued)
+    return obj
+
+
+def test_a_burst_of_events_is_one_pass():
+    """A hub powering up is several events, and one snapshot answers them all."""
+    obj = events(["add", "add", "bind"])
+    check("something changed", obj.wait(None), True)
+    check("queue drained", obj._monitor.events, [])
+
+
+def test_a_timeout_is_not_an_event():
+    """The caller ticks either way; the difference is only what it means."""
+    obj = events([])
+    check("nothing changed", obj.wait(30.0), False)
+    check("waited that long", obj._monitor.polls, [30.0])
+
+
 def test_the_map_survives_a_restart():
     path = temp()
     obj = watcher(path, ["/dev/ttyUSB0"], {"/dev/ttyUSB0": "19aa44"})

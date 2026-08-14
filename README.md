@@ -204,7 +204,12 @@ referred to it. A position map does not care which unit is in the socket.
 
 That is the actual choice — identity or position — rather than one being simply
 better. A udev rule keyed to the physical USB port is the right tool when you
-genuinely mean the socket, and is still fully supported:
+genuinely mean the socket, and is still fully supported.
+
+Worth separating from the other udev in this repo, because they are unrelated:
+the watcher service *listens* to udev to learn when a port appears, which is
+about noticing a device. A rules file *names* one. Nothing here writes rules,
+and that is a deliberate line rather than an omission — see below.
 
 ```udev
 # /etc/udev/rules.d/99-knomi.rules - one line per USB port on the hub
@@ -526,18 +531,44 @@ are not tracking — and worse, `recover()` does `checkout(primary_branch)`
 followed by a hard reset, so the "recover" button offered when a repo looks
 wrong would move you onto that branch and discard local state.
 
-`system_dependencies` is how the watcher gets `python3-serial`, which it needs
-because the unit runs the system `python3` rather than Klipper's virtualenv.
-`install_script:` is the option it replaced and works too — Moonraker reads one
-or the other, never both — but note that neither *runs* `install.sh`. Moonraker
-only reads it, looking for `PKGLIST=` lines.
+You do not have to keep that right by hand. `install.sh` sets it from the branch
+the checkout is on, so switching branches is:
 
-`install.sh` does the `asvc` and `update_manager` wiring for you where it safely
-can — see below.
+```sh
+git checkout dev && ./install.sh
+```
+
+On a detached HEAD it leaves the line alone and says so, because there is no
+branch to name and `primary_branch: HEAD` is exactly the value that would make
+that recover button destructive.
+
+`system_dependencies` is how the watcher gets `python3-serial` and
+`python3-pyudev`, which it needs because the unit runs the system `python3`
+rather than Klipper's virtualenv. It is the **only** place this repo declares
+packages. `install_script:` is the option it replaced and Moonraker still reads
+it — one or the other, never both — but it will find nothing here, so a config
+still using it installs no dependencies. Note that neither option *runs*
+`install.sh`; Moonraker only ever reads it.
 
 `managed_services` is what Moonraker restarts after pulling. `klipper` because
-the module is symlinked into `klippy/extras` and only reloads on restart; drop
-`knomi_serial` from the list if you are not running the watcher service.
+the module is symlinked into `klippy/extras` and only reloads on restart, and
+the watcher because `ExecStart` points into the repo, so a pull updates it in
+place and a restart is what picks that up.
+
+**`install.sh` keeps this section correct rather than only writing it once.** On
+every run it repairs the keys that decide whether Moonraker can manage the repo
+at all — `path`, `primary_branch`, `system_dependencies`, `managed_services`,
+and a missing `type` — and leaves everything else exactly as it found it. That
+includes `origin`, because running a fork is a legitimate thing to be doing and
+nothing about your checkout contradicts it, and it includes your comments, your
+key order and any key it does not recognise. Nothing is rewritten when nothing
+is wrong; when something is, it says what it changed and leaves the previous
+file at `moonraker.conf.knomi.bak`.
+
+This is how a config written by an older version of this repo gets fixed. When
+`scripts/moonraker-system-dependencies.json` moved into `scripts/`, every
+existing section kept pointing at where it used to be — and Moonraker's
+`_verify_path` only warns, so those printers silently stopped getting packages.
 
 **The section name is not free.** Moonraker accepts a `managed_services` value
 only if it equals the `[update_manager <name>]` section itself, `klipper`, or

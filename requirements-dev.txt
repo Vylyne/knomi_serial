@@ -7,8 +7,15 @@
 # the module needs it, tests included. A Klipper host already has it; a CI
 # runner does not, which is how its absence went unnoticed until the first push.
 #
-# PlatformIO is deliberately not here. It is the firmware toolchain rather than
-# a Python dependency of this code, it pulls in a great deal, and the CI job
+# pyudev is deliberately not here, even though the watcher service needs it to
+# run. It is imported lazily, inside the class that opens the netlink socket, so
+# --once and the tests never reach it - and the tests that cover that class hand
+# it a stub monitor rather than a kernel. Installing it here would also put a
+# Linux-only package on the machines this is developed on. It is declared where
+# it actually gets installed: scripts/moonraker-system-dependencies.json.
+#
+# PlatformIO is deliberately not here either. It is the firmware toolchain rather
+# than a Python dependency of this code, it pulls in a great deal, and the CI job
 # that needs it installs it on its own.
 pyserial>=3.5
 ruff>=0.6

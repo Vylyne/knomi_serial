@@ -10,85 +10,203 @@ REPO="$(cd "$(dirname "$0")" && pwd)"
 # see the Moonraker block below for why those two are not independent.
 SERVICE_NAME="knomi_serial"
 
-# Scraped, not executed. Moonraker reads this file looking for PKGLIST= lines
-# and installs what it finds - see _read_system_dependencies in
-# update_manager/app_deploy.py - which is the whole of what `install_script:`
-# does. Declared because the watcher runs under the system python3 rather than
-# Klipper's virtualenv, and `import serial` fails there on a machine where only
-# Klipper's venv has pyserial.
+DATA="$HOME/printer_data/knomi"
+PRINTER_DATA="${PRINTER_DATA:-$HOME/printer_data}"
+INSTALLED_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
+UNIT="$REPO/service/${SERVICE_NAME}.service"
+NO_WATCH_MARKER="$DATA/.no-watch"
+STAMP="$DATA/.install-version"
+
+# ---------------------------------------------------------------------------
+# Flags.
+# ---------------------------------------------------------------------------
+
+WATCH=no
+NO_WATCH=no
+NO_ROOT=no
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --watch)    WATCH=yes ;;
+        --no-watch) NO_WATCH=yes ;;
+        --no-root)  NO_ROOT=yes ;;
+        -h|--help)
+            echo "usage: ./install.sh [--watch|--no-watch] [--no-root]"
+            echo
+            echo "  --watch     install the watcher service, undoing a previous"
+            echo "              --no-watch. It is installed by default."
+            echo "  --no-watch  do not install it, and remember that."
+            echo "  --no-root   skip anything needing root rather than asking"
+            echo "              for it. Whatever was skipped is reported, and"
+            echo "              the install is not recorded as complete."
+            exit 0 ;;
+        *)
+            echo "unknown option: $1" >&2
+            echo "try: ./install.sh --help" >&2
+            exit 2 ;;
+    esac
+    shift
+done
+
+if [ "$WATCH" = yes ] && [ "$NO_WATCH" = yes ]; then
+    echo "--watch and --no-watch mean opposite things; pick one." >&2
+    exit 2
+fi
+
+# ---------------------------------------------------------------------------
+# Privilege, decided once.
 #
-# The same list lives in moonraker-system-dependencies.json, which is the option
-# that replaced this one. Moonraker reads one or the other and never both, so
-# which file matters depends on a line in somebody else's moonraker.conf - and
-# both are kept because a config predating `system_dependencies:` still works.
-# tests/test_packaging.py fails if they drift apart.
-PKGLIST="${PKGLIST} python3-serial"
+# Resolved into a variable here so that every privileged line below can just say
+# `$SUDO systemctl ...` with no conditional wrapped around it. --no-root is
+# simply the case where that variable is empty and NEED_ROOT is set, which is
+# why it is worth a flag rather than a check per command.
+#
+# `sudo -n` when there is no terminal: a password prompt nobody can answer is
+# a hang, and this script is run from places with no tty.
+# ---------------------------------------------------------------------------
+
+SUDO=""
+CAN_ROOT=yes
+if [ "$NO_ROOT" = yes ]; then
+    CAN_ROOT=no
+elif [ "$(id -u)" = 0 ]; then
+    SUDO=""
+elif command -v sudo >/dev/null 2>&1; then
+    if [ -t 0 ]; then
+        SUDO="sudo"
+    else
+        # Probed, because this is the case that would otherwise fail in the
+        # middle of the script: sudo without a password and without a terminal
+        # to ask at. Interactive sudo is not probed - it would prompt for a
+        # password on a run that may not need root at all.
+        SUDO="sudo -n"
+        $SUDO true >/dev/null 2>&1 || CAN_ROOT=no
+    fi
+else
+    CAN_ROOT=no
+fi
+
+# Everything install.sh owns is current. Flipped by anything that needed doing
+# and could not be done, which is what stops the version stamp being written -
+# see the end of this script. A step that was *declined* rather than blocked
+# does not flip it: that is a choice being honoured, not a change being lost.
+REQUIRED_CHANGES_MADE=yes
+SKIPPED=""
+
+skipped() {
+    REQUIRED_CHANGES_MADE=no
+    SKIPPED="$SKIPPED
+  - $1"
+}
+
+# ---------------------------------------------------------------------------
+# The Klipper module.
+# ---------------------------------------------------------------------------
 
 EXTRA_PATH="$HOME/klipper/klippy/extras/knomi_serial.py"
 
 echo "Creating symbolic link to klippy_extras/knomi_serial.py at $EXTRA_PATH"
 ln -sf "$REPO/klippy_extras/knomi_serial.py" "$EXTRA_PATH"
 
-# if ! grep -q "klippy/extras/knomi_serial.py" "$HOME/klipper/.git/info/exclude"; then
-#   echo "klippy/extras/knomi_serial.py" >> "$HOME/klipper/.git/info/exclude"
-# fi
+mkdir -p "$DATA"
+
+# ---------------------------------------------------------------------------
+# Dependencies.
+#
+# Moonraker installs these itself on every update, from
+# scripts/moonraker-system-dependencies.json - it reads that file, it does not
+# run this script. This block is for the person running install.sh by hand,
+# which is the only path that would otherwise miss them.
+# ---------------------------------------------------------------------------
+
+PYTHON="$(command -v python3)"
+
+for want in serial:python3-serial pyudev:python3-pyudev; do
+    MOD="${want%%:*}"
+    PKG="${want##*:}"
+    "$PYTHON" -c "import $MOD" >/dev/null 2>&1 && continue
+    echo "$PKG is missing from $PYTHON, which the watcher needs."
+    if [ "$CAN_ROOT" = no ]; then
+        echo "  not installing it - no root available"
+        skipped "install $PKG"
+    elif $SUDO apt-get install -y "$PKG" >/dev/null 2>&1; then
+        echo "  installed $PKG"
+    else
+        echo "  could not install it. The watcher will not start until you run:"
+        echo "    sudo apt install $PKG"
+        skipped "install $PKG"
+    fi
+done
 
 # ---------------------------------------------------------------------------
 # The watcher service.
 #
 # The unit is generated rather than shipped because the paths in it are this
-# machine's - where the repo is, who Klipper runs as, which python. Hardcoding
-# those was wrong and the failure was quiet: systemd's ProtectHome alongside a
-# ReadWritePaths that does not exist starts cleanly and then cannot write, which
-# reads as "the watcher does nothing" rather than as a path problem.
+# machine's - where the repo is, who Klipper runs as, where printer_data is.
+# Hardcoding those was wrong and the failure was quiet: systemd's ProtectHome
+# alongside a ReadWritePaths that does not exist starts cleanly and then cannot
+# write, which reads as "the watcher does nothing" rather than as a path problem.
+#
+# What it does *not* contain any more is how the watcher is launched. That lives
+# in service/run.sh, because a Moonraker update can update a file in the repo
+# and cannot touch a file in /etc.
 # ---------------------------------------------------------------------------
 
-DATA="$HOME/printer_data/knomi"
-PYTHON="$(command -v python3)"
-
-# The same dependency, for the manual path. Moonraker only reads PKGLIST when it
-# updates this repo, and somebody running install.sh by hand never goes near it.
-if ! "$PYTHON" -c "import serial" >/dev/null 2>&1; then
-    echo "pyserial is missing from $PYTHON, which the watcher needs."
-    if sudo apt-get install -y python3-serial >/dev/null 2>&1; then
-        echo "  installed python3-serial"
-    else
-        echo "  could not install it. The watcher will not start until you run:"
-        echo "    sudo apt install python3-serial"
-    fi
-fi
-UNIT="$REPO/service/knomi_serial.service"
-
-mkdir -p "$DATA"
-
 sed -e "s|@USER@|$USER|g" \
-    -e "s|@PYTHON@|$PYTHON|g" \
     -e "s|@REPO@|$REPO|g" \
     -e "s|@DATA@|$DATA|g" \
-    "$REPO/service/knomi_serial.service.in" > "$UNIT"
+    "$REPO/service/${SERVICE_NAME}.service.in" > "$UNIT"
 
 echo
 echo "Wrote $UNIT for this machine."
 
-# Installed if you already have it, or if you ask for it - never decided here.
+# Installed by default. A display row is the normal case now: the map is what
+# lets a display be reconnected mid-print and what a firmware updater reads with
+# Klipper stopped, and an idle process blocked on a netlink socket is not
+# something a printer notices.
 #
-# Unlike a Klipper module, a background daemon is not implied by installing
-# this repo. Most printers have one display, address it by device_id, and need
-# nothing watching anything. So the rule is that install.sh keeps the service up
-# to date, and does not decide to give you one: already installed means the unit
-# is refreshed and the service restarted.
+# --no-watch is how you decline, and it is *remembered*, because the notice
+# about a stale install tells people to run ./install.sh for reasons that have
+# nothing to do with the watcher. Without the marker, following our own
+# instructions would quietly install a daemon somebody had turned down.
 #
-# Note that Moonraker does not run this script. `install_script:` is read as
-# text and scraped for PKGLIST= to find apt packages - see
-# _read_system_dependencies in app_deploy.py - so an update never reaches here.
-# It does not need to: ExecStart points into the repo, so a git pull updates the
-# watcher's code where it stands and `managed_services: knomi_serial` restarts
-# it. The unit itself only goes stale if the paths in it change.
+# A unit that is already there is refreshed either way. --no-watch governs
+# whether you are given a service, not whether an existing one is kept current,
+# and removing one stays the documented manual thing it was.
 #
-# No prompt anywhere regardless, so that running this from anything without a
-# terminal cannot hang waiting for an answer.
-INSTALLED_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
-if [ "${1:-}" = "--watch" ] || [ -f "$INSTALLED_UNIT" ]; then
+# No prompt anywhere, so that running this from something without a terminal
+# cannot hang waiting for an answer.
+WATCHER_INSTALLED=no
+
+if [ "$WATCH" = yes ]; then
+    rm -f "$NO_WATCH_MARKER"
+fi
+
+if [ "$NO_WATCH" = yes ] && [ ! -f "$INSTALLED_UNIT" ]; then
+    printf '%s\n' \
+        "# ./install.sh --no-watch, $(date -u '+%Y-%m-%d')." \
+        "# Delete this, or run ./install.sh --watch, to install the service." \
+        > "$NO_WATCH_MARKER"
+    echo "Not installing the $SERVICE_NAME service, and remembering that."
+    echo "  ./install.sh --watch installs it later."
+elif [ ! -f "$INSTALLED_UNIT" ] && [ -f "$NO_WATCH_MARKER" ]; then
+    echo "The $SERVICE_NAME service was declined by a previous --no-watch."
+    echo "  ./install.sh --watch installs it."
+elif [ "$CAN_ROOT" = no ] && ! cmp -s "$UNIT" "$INSTALLED_UNIT"; then
+    # Tested before acting, and the test needs no privileges - the installed
+    # unit is world readable. So a run with no root on a machine that is already
+    # correct is a complete run, not a partial one.
+    echo "The $SERVICE_NAME unit needs (re)installing and this run has no root."
+    skipped "install $INSTALLED_UNIT"
+elif [ "$NO_WATCH" = yes ]; then
+    echo "Refreshing the $SERVICE_NAME service; --no-watch only declines a"
+    echo "first install, and this machine already has one."
+    WATCHER_INSTALLED=yes
+else
+    WATCHER_INSTALLED=yes
+fi
+
+if [ "$WATCHER_INSTALLED" = yes ]; then
     # Whether it is running now decides whether it is running afterwards.
     # `systemctl restart` would start a service somebody had deliberately
     # stopped, and `enable` would re-enable one they had deliberately disabled -
@@ -96,44 +214,43 @@ if [ "${1:-}" = "--watch" ] || [ -f "$INSTALLED_UNIT" ]; then
     FIRST_INSTALL=no
     [ -f "$INSTALLED_UNIT" ] || FIRST_INSTALL=yes
 
-    WAS_ACTIVE=no
-    if systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
-        WAS_ACTIVE=yes
-        sudo systemctl stop "${SERVICE_NAME}.service"
-    fi
-
-    if [ "$FIRST_INSTALL" = yes ]; then
-        echo "Installing the $SERVICE_NAME service."
+    if cmp -s "$UNIT" "$INSTALLED_UNIT"; then
+        echo "The $SERVICE_NAME unit is already current."
     else
-        echo "Updating the $SERVICE_NAME service."
-    fi
+        WAS_ACTIVE=no
+        if systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
+            WAS_ACTIVE=yes
+            $SUDO systemctl stop "${SERVICE_NAME}.service"
+        fi
 
-    sudo install -m 0644 -o root -g root "$UNIT" "$INSTALLED_UNIT"
-    sudo systemctl daemon-reload
+        if [ "$FIRST_INSTALL" = yes ]; then
+            echo "Installing the $SERVICE_NAME service."
+        else
+            echo "Updating the $SERVICE_NAME service."
+        fi
 
-    if [ "$FIRST_INSTALL" = yes ]; then
-        # Enabled only on the run that asked for the service. A later update
-        # must not re-enable one that was switched off in between.
-        sudo systemctl enable "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
-        WAS_ACTIVE=yes
-    fi
+        $SUDO install -m 0644 -o root -g root "$UNIT" "$INSTALLED_UNIT"
+        $SUDO systemctl daemon-reload
 
-    if [ "$WAS_ACTIVE" = yes ]; then
-        sudo systemctl start "${SERVICE_NAME}.service"
-        echo "  $(systemctl is-active "${SERVICE_NAME}.service" || true) - systemctl status $SERVICE_NAME"
-    else
-        echo "  unit refreshed; service was not running, so it was left stopped."
-        echo "  start it with: sudo systemctl start $SERVICE_NAME"
+        if [ "$FIRST_INSTALL" = yes ]; then
+            # Enabled only on the run that first installs it. A later update
+            # must not re-enable one that was switched off in between.
+            $SUDO systemctl enable "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+            WAS_ACTIVE=yes
+        fi
+
+        if [ "$WAS_ACTIVE" = yes ]; then
+            $SUDO systemctl start "${SERVICE_NAME}.service"
+            echo "  $(systemctl is-active "${SERVICE_NAME}.service" || true) - systemctl status $SERVICE_NAME"
+        else
+            echo "  unit refreshed; service was not running, so it was left stopped."
+            echo "  start it with: sudo systemctl start $SERVICE_NAME"
+        fi
     fi
 else
-    echo "The watcher is optional - see service/README.md for what it buys you."
-    echo "Try it without installing anything:"
+    echo "Try the watcher without installing anything:"
     echo
     echo "  python3 $REPO/service/knomi_serial_watch.py --once"
-    echo
-    echo "To install it as a service, re-run with --watch:"
-    echo
-    echo "  ./install.sh --watch"
 fi
 echo
 
@@ -152,14 +269,20 @@ echo
 #    has to be called exactly what the systemd unit is called, or Moonraker
 #    cannot be asked to restart it.
 #
+# Moonraker does not run this script. `install_script:` is read as text and
+# scraped for dependency lines - see _read_system_dependencies in app_deploy.py
+# - so an update never reaches here. It does not need to for the code: ExecStart
+# points into the repo, so a git pull updates the watcher where it stands and
+# `managed_services: knomi_serial` restarts it. It does need to for anything in
+# this file, which is why there is a version stamp at the bottom.
+#
 # The asvc line is appended here because it is one word on its own line and
-# trivially undone. moonraker.conf is only ever appended to when there is no
-# section at all - an existing one is reported, never rewritten. Renaming a
-# section changes what the update panel shows, and that is not a decision to
-# make silently in somebody's live printer config.
+# trivially undone. An existing [update_manager] section is *repaired* rather
+# than rewritten: the keys that decide whether Moonraker can manage this repo at
+# all are corrected, and the ones that are somebody's choice - `origin` above
+# all, because running a fork is a legitimate thing - are left alone.
 # ---------------------------------------------------------------------------
 
-PRINTER_DATA="${PRINTER_DATA:-$HOME/printer_data}"
 ASVC="$PRINTER_DATA/moonraker.asvc"
 MOONRAKER_CONF="$PRINTER_DATA/config/moonraker.conf"
 
@@ -176,6 +299,34 @@ else
     MOONRAKER_CHANGED=yes
 fi
 
+# The branch the checkout is actually on, because that is what primary_branch
+# has to name: Moonraker builds its upstream ref from it, and recover() does a
+# checkout followed by a hard reset. So `git checkout <branch> && ./install.sh`
+# is meant to be the whole of switching branches.
+#
+# Empty on a detached HEAD, where rev-parse answers the literal "HEAD", and on
+# anything that is not a checkout at all. The repair reads empty as "no opinion,
+# leave what is there" - writing `primary_branch: HEAD` would turn the update
+# panel's recover button into somebody's lost working tree.
+BRANCH="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [ "$BRANCH" = HEAD ]; then
+    echo "  detached HEAD - leaving primary_branch alone"
+    BRANCH=""
+elif [ -n "$BRANCH" ] \
+     && ! git -C "$REPO" rev-parse --verify -q "refs/remotes/origin/$BRANCH" \
+          >/dev/null 2>&1; then
+    # Local ref only, so no network call. Moonraker compares against
+    # origin/<branch> and calls a repo it cannot find invalid.
+    echo "  NOTE: origin/$BRANCH does not exist here. Moonraker will call the"
+    echo "  repo invalid until that branch is pushed."
+fi
+
+if [ "$WATCHER_INSTALLED" = yes ] || [ -f "$INSTALLED_UNIT" ]; then
+    MANAGED="klipper $SERVICE_NAME"
+else
+    MANAGED="klipper"
+fi
+
 if [ ! -f "$MOONRAKER_CONF" ]; then
     echo "  no $MOONRAKER_CONF - skipping"
 else
@@ -187,15 +338,63 @@ else
 type: git_repo
 origin: https://github.com/Vylyne/knomi_serial.git
 path: $REPO
-primary_branch: main
-managed_services: klipper $SERVICE_NAME
+primary_branch: ${BRANCH:-main}
+managed_services: $MANAGED
 system_dependencies: scripts/moonraker-system-dependencies.json
 CONF
         echo "  added [update_manager $SERVICE_NAME] to moonraker.conf"
         MOONRAKER_CHANGED=yes
     else
         FOUND="$(printf '%s' "$SECTION_LINE" | sed 's/^[0-9]*:\[update_manager *//; s/\].*$//')"
-        echo "  [update_manager $FOUND] already present, left alone"
+
+        # managed_services must equal the section's own name, so the value
+        # depends on what the section is actually called rather than on what we
+        # would have called it.
+        if [ "$FOUND" = "$SERVICE_NAME" ]; then
+            SECTION_MANAGED="$MANAGED"
+        else
+            SECTION_MANAGED="klipper"
+        fi
+
+        NEW="$(mktemp)"
+        REPORT="$(mktemp)"
+        if awk -f "$REPO/scripts/moonraker_section.awk" \
+               -v section="$FOUND" \
+               -v path="$REPO" \
+               -v sysdeps="scripts/moonraker-system-dependencies.json" \
+               -v services="$SECTION_MANAGED" \
+               -v branch="$BRANCH" \
+               -v home="$HOME" \
+               "$MOONRAKER_CONF" > "$NEW" 2> "$REPORT" \
+           && [ -s "$NEW" ]; then
+            if cmp -s "$NEW" "$MOONRAKER_CONF"; then
+                echo "  [update_manager $FOUND] is already correct"
+            else
+                cp "$MOONRAKER_CONF" "$MOONRAKER_CONF.knomi.bak"
+                # Written through the existing file rather than moved over it,
+                # so its owner and mode survive. A `mv` from /tmp would hand
+                # Moonraker's config whatever mktemp chose.
+                cat "$NEW" > "$MOONRAKER_CONF"
+                echo "  repaired [update_manager $FOUND]:"
+                sed 's/^/    /' "$REPORT"
+                echo "  the previous file is at $MOONRAKER_CONF.knomi.bak"
+                MOONRAKER_CHANGED=yes
+            fi
+        else
+            echo "  could not read $MOONRAKER_CONF - left it alone"
+            skipped "repair [update_manager $FOUND]"
+        fi
+        rm -f "$NEW" "$REPORT"
+
+        if grep -q '^install_script:' "$MOONRAKER_CONF"; then
+            echo
+            echo "  NOTE: this config uses install_script:, which Moonraker"
+            echo "  reads for dependencies and this repo no longer declares"
+            echo "  there. Replace that line with:"
+            echo
+            echo "    system_dependencies: scripts/moonraker-system-dependencies.json"
+        fi
+
         if [ "$FOUND" != "$SERVICE_NAME" ]; then
             echo
             echo "  NOTE: that section is named '$FOUND', but the service is"
@@ -222,11 +421,11 @@ if [ "$MOONRAKER_CHANGED" = yes ]; then
     PORT="$(awk '/^\[server\]/{s=1;next} /^\[/{s=0} s && /^[[:space:]]*port:/{gsub(/[^0-9]/,"",$0); print; exit}' "$MOONRAKER_CONF" 2>/dev/null || true)"
     PORT="${PORT:-7125}"
     if [ ! -t 0 ]; then
-        # No tty almost certainly means this is Moonraker's own install_script.
-        # Restarting the process that is running this script would kill the
-        # update halfway through, so say what is needed and let it finish.
+        # No tty almost certainly means this is not a person at a keyboard.
+        # Restarting the process that is running this script would kill it
+        # halfway through, so say what is needed and let it finish.
         echo
-        echo "  Moonraker has to restart to read that. Once the update finishes:"
+        echo "  Moonraker has to restart to read that. Once this finishes:"
         echo "    sudo systemctl restart moonraker"
     elif ! command -v curl >/dev/null 2>&1; then
         echo "  restart Moonraker to pick that up: sudo systemctl restart moonraker"
@@ -237,4 +436,23 @@ if [ "$MOONRAKER_CHANGED" = yes ]; then
         echo "    sudo systemctl restart moonraker"
     fi
 fi
+
+# ---------------------------------------------------------------------------
+# The stamp, last.
+#
+# It means "everything install.sh owns is current", not "install.sh ran". A run
+# that could not do something it needed to leaves the old number in place, so
+# the notice Klipper posts and the watcher logs keeps firing until somebody runs
+# it properly. Recording a partial run as complete would silence the one thing
+# that would have told them.
+# ---------------------------------------------------------------------------
+
 echo
+if [ "$REQUIRED_CHANGES_MADE" = yes ]; then
+    cat "$REPO/scripts/install-version" > "$STAMP"
+    echo "Done."
+else
+    echo "Not recording this as a complete install. Still to do:$SKIPPED"
+    echo
+    echo "  sudo ./install.sh"
+fi

@@ -42,6 +42,8 @@ to be current, and lets the screen sleep on its normal timers again.
 
 ## Contents
 
+- [Features](#features)
+- [TODO](#todo)
 - [Using it](#using-it)
 - [Scope, and what is finished](#scope-and-what-is-finished)
 - [Installation](#installation)
@@ -67,6 +69,25 @@ Three documents sit outside this one:
 [docs/mcu-updater.md](docs/mcu-updater.md) for what a flashing tool needs from
 this repo, and [docs/hardware.md](docs/hardware.md) for the pin map.
 [service/README.md](service/README.md) covers the watcher.
+
+## Features
+
+- [x] Direct USB serial connection from Klipper to the display, with no WiFi or
+  Moonraker dependency on the device.
+- [x] Stable hardware identity and automatic rediscovery when display ports
+  change.
+- [x] Coordinated multi-display and toolchanger support with per-tool targeting.
+- [x] Runtime-configurable pages, colours, readouts, brightness, sleep behavior,
+  and touchscreen corner controls.
+- [x] Link-health, firmware, protocol, configuration, and device status exposed
+  through the Klipper object API.
+- [x] Host watcher, Moonraker update-manager integration, release images, and
+  updater-facing discovery metadata.
+
+## TODO
+
+- [ ] Bring the inherited home and move pages into the current design language.
+- [ ] Support corner switches wired directly to the display's GPIO pins.
 
 ## Using it
 

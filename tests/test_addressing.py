@@ -221,6 +221,240 @@ class FakeConfigError(Exception):
     pass
 
 
+_REQUIRED_OBJECT = object()
+
+
+class FakeGcodeRegistry:
+    def register_command(self, *args, **kwargs):
+        pass
+
+
+class FakeReactor:
+    pass
+
+
+class FakePrinter:
+    config_error = FakeConfigError
+
+    def __init__(self):
+        self.objects = {"gcode": FakeGcodeRegistry()}
+        self.handlers = {}
+
+    def get_reactor(self):
+        return FakeReactor()
+
+    def lookup_object(self, name, default=_REQUIRED_OBJECT):
+        if name in self.objects:
+            return self.objects[name]
+        if default is not _REQUIRED_OBJECT:
+            return default
+        raise self.config_error(f"Unknown object '{name}'")
+
+    def add_object(self, name, value):
+        self.objects[name] = value
+
+    def register_event_handler(self, event, handler):
+        self.handlers.setdefault(event, []).append(handler)
+
+
+class FakeSection:
+    def __init__(self, values=None, printer=None, name="knomi_serial T0_knomi"):
+        self.values = dict(values or {})
+        self.printer = printer or FakePrinter()
+        self.name = name
+
+    def get_name(self):
+        return self.name
+
+    def get_printer(self):
+        return self.printer
+
+    def get(self, key, default=None):
+        return self.values.get(key, default)
+
+    def getfloat(self, key, default=None, above=None):
+        value = float(self.values[key]) if key in self.values else default
+        if above is not None and not value > above:
+            raise self.error(f"{key} must be above {above}")
+        return value
+
+    @staticmethod
+    def error(message):
+        return FakeConfigError(message)
+
+
+def configured(printer=None, name="knomi_serial T0_knomi", **values):
+    values.setdefault("device_id", "19aa44")
+    return k.Knomi_Serial(FakeSection(values, printer, name))
+
+
+def refuses_section(phrase, **values):
+    try:
+        configured(**values)
+    except FakeConfigError as e:
+        if phrase not in str(e):
+            raise AssertionError(f"wrong reason: {e}") from None
+        return
+    raise AssertionError(f"accepted invalid config {values!r}")
+
+
+def test_device_id_is_exactly_six_hex_characters():
+    for value in ("19aa4", "19aa444", "19xz44", "-12345", "12_345"):
+        refuses_section("device_id", device_id=value)
+    check("uppercase accepted", configured(device_id="19AA44").config_device_id,
+          "19aa44")
+
+
+def test_colours_are_exactly_rrggbb():
+    for value in ("FFF", "1234567", "notpink", "+FA7C4", "FF_A7C"):
+        refuses_section("color_machine", color_machine=value)
+    configured(color_machine="#FFA7C4")
+
+
+def test_times_must_be_finite_and_fit_the_wire_field():
+    for value in ("nan", "inf", "4294968"):
+        refuses_section("dim_time", dim_time=value)
+    configured(dim_time="4294967.295")
+
+
+def test_move_speeds_must_be_positive():
+    for key in ("speed_x", "speed_y", "speed_z"):
+        refuses_section(key, **{key: 0})
+        refuses_section(key, **{key: -1})
+
+
+def test_numeric_tool_must_fit_the_signed_wire_field():
+    refuses_section("tool", tool="T2147483648")
+    configured(tool="T2147483647")
+
+
+class FakeTemperature:
+    def __init__(self, temp=25, target=0):
+        self.reading = temp, target
+
+    def get_temp(self, eventtime):
+        return self.reading
+
+
+class FakeHeaters:
+    def __init__(self, **heaters):
+        self.heaters = heaters
+
+    def lookup_heater(self, name):
+        if name not in self.heaters:
+            raise FakeConfigError(f"Unknown heater '{name}'")
+        return self.heaters[name]
+
+
+def temperature_setup(*sections, heaters=None, objects=None):
+    printer = FakePrinter()
+    printer.objects.update(objects or {})
+    printer.objects["heaters"] = FakeHeaters(**(heaters or {}))
+    devices = []
+    for index, values in enumerate(sections):
+        values = dict(values)
+        values.setdefault("device_id", f"19aa4{index}")
+        devices.append(configured(
+            printer,
+            name=f"knomi_serial T{index}_knomi",
+            **values,
+        ))
+    cluster = devices[0].cluster
+    cluster.heaters = printer.objects["heaters"]
+    return cluster, devices
+
+
+def refuses_temperature(cluster, *phrases):
+    try:
+        cluster._resolve_temperature_sources()
+    except FakeConfigError as e:
+        message = str(e)
+        for phrase in phrases:
+            if phrase not in message:
+                raise AssertionError(f"wrong reason: {e}") from None
+        return
+    raise AssertionError(f"accepted invalid temperature config ({phrases!r})")
+
+
+def test_temperature_references_are_validated_before_updates_start():
+    cases = (
+        ({"heater_hotend": "missing"}, "heater_hotend"),
+        ({"heater_bed": "missing"}, "heater_bed"),
+        ({"heater_chamber": "missing"}, "heater_chamber"),
+        ({"sensor_chamber": "missing"}, "sensor_chamber"),
+        ({"sensor_mcu": "missing"}, "sensor_mcu"),
+    )
+    for values, option in cases:
+        cluster, _ = temperature_setup(values)
+        refuses_temperature(cluster, option, "missing")
+
+
+def test_sensor_mcu_refuses_an_object_that_is_not_a_temperature_source():
+    cluster, _ = temperature_setup(
+        {"sensor_mcu": "mcu"},
+        objects={"mcu": object()},
+    )
+    refuses_temperature(cluster, "sensor_mcu", "mcu", "temperature")
+
+
+def test_shared_temperature_sources_may_not_disagree():
+    cluster, _ = temperature_setup(
+        {"heater_bed": "bed"},
+        {"heater_bed": "other_bed"},
+        heaters={"bed": FakeTemperature(), "other_bed": FakeTemperature()},
+    )
+    refuses_temperature(cluster, "heater_bed", "T0_knomi", "T1_knomi")
+
+    cluster, _ = temperature_setup(
+        {"heater_chamber": "chamber"},
+        {"sensor_chamber": "chamber_sensor"},
+        heaters={"chamber": FakeTemperature()},
+        objects={"temperature_sensor chamber_sensor": FakeTemperature()},
+    )
+    refuses_temperature(cluster, "chamber", "T0_knomi", "T1_knomi")
+
+
+def test_valid_temperature_sources_are_resolved_once():
+    extruder = FakeTemperature(210, 220)
+    bed = FakeTemperature(60, 65)
+    chamber = FakeTemperature(45)
+    mcu_sensor = FakeTemperature(52)
+    mcu_fan = FakeTemperature(48, 50)
+    custom_sensor = FakeTemperature(41)
+    cluster, devices = temperature_setup(
+        {
+            "heater_hotend": "extruder",
+            "heater_bed": "bed",
+            "sensor_chamber": "chamber",
+            "sensor_mcu": "toolboard",
+        },
+        {
+            "heater_bed": "bed",
+            "sensor_chamber": "chamber",
+            "sensor_mcu": "mcu_fan",
+        },
+        {
+            "heater_bed": "bed",
+            "sensor_chamber": "chamber",
+            "sensor_mcu": "custom_sensor",
+        },
+        heaters={"extruder": extruder, "bed": bed},
+        objects={
+            "temperature_sensor chamber": chamber,
+            "temperature_sensor toolboard": mcu_sensor,
+            "temperature_fan mcu_fan": mcu_fan,
+            "custom_sensor": custom_sensor,
+        },
+    )
+    cluster._resolve_temperature_sources()
+    check("hotend cached", devices[0].hotend, extruder)
+    check("bed cached", cluster.bed_sensor, bed)
+    check("chamber cached", cluster.chamber_sensor, chamber)
+    check("temperature sensor cached", devices[0].mcu_sensor, mcu_sensor)
+    check("temperature fan cached", devices[1].mcu_sensor, mcu_fan)
+    check("custom temperature source cached", devices[2].mcu_sensor, custom_sensor)
+
+
 def startup(devices, ports, printing=False):
     """A cluster that has just run its klippy:connect discovery pass."""
     c = k.KnomiCluster.__new__(k.KnomiCluster)

@@ -13,6 +13,7 @@ import dataclasses
 import enum
 import json
 import logging
+import math
 import os
 import struct
 import time
@@ -48,6 +49,9 @@ _RECONNECT_PERIOD = 5.0
 _GCODES_MAX_LEN = 255
 _FILAMENT_TYPE_MAX_LEN = 15
 _MESSAGE_MAX_LEN = 127
+_INT32_MAX = (1 << 31) - 1
+_UINT32_MAX = (1 << 32) - 1
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 #: Sent where the host has no answer - an unsliced print with no layer count, a
 #: job too young to estimate. Distinct from zero, which is a real answer.
@@ -667,6 +671,9 @@ class KnomiCluster:
 
         self.gcode = printer.lookup_object("gcode")
         self.heaters = None
+        self.bed_sensor = None
+        self.chamber_sensor = None
+        self.chamber_is_heater = False
         self.toolhead = None
         self.virtual_sdcard = None
         self.print_stats = None
@@ -961,6 +968,7 @@ class KnomiCluster:
         self.toolhead = self.printer.lookup_object("toolhead")
         self.virtual_sdcard = self.printer.lookup_object("virtual_sdcard")
         self.print_stats = self.printer.lookup_object("print_stats")
+        self._resolve_temperature_sources()
 
         # Core Klipper, loaded on every printer - but looked up softly, because
         # a fork that drops it should cost the screens their wave animation and
@@ -989,6 +997,108 @@ class KnomiCluster:
         )
         if notice:
             self.gcode.respond_info(notice)
+
+    def _config_heater(self, device, option, name):
+        try:
+            return self.heaters.lookup_heater(name)
+        except self.printer.config_error as e:
+            raise self.printer.config_error(
+                f"{device.name}: {option} '{name}' is not a configured heater"
+            ) from e
+
+    def _config_temperature(self, device, option, name, object_names):
+        sensor = None
+        for object_name in object_names:
+            sensor = self.printer.lookup_object(object_name, None)
+            if sensor is not None:
+                break
+        if sensor is None or not callable(getattr(sensor, "get_temp", None)):
+            raise self.printer.config_error(
+                f"{device.name}: {option} '{name}' is not a configured "
+                "temperature source"
+            )
+        return sensor
+
+    def _shared_temperature(self, first, device, option, name):
+        current = option, name, device
+        if first is None:
+            return current
+        if first[:2] == current[:2]:
+            return first
+        first_option, first_name, first_device = first
+        label = "heater_bed" if option == first_option == "heater_bed" else "chamber"
+        raise self.printer.config_error(
+            f"knomi_serial: {label} disagrees between "
+            f"{first_device.name} ({first_option}: {first_name}) and "
+            f"{device.name} ({option}: {name})"
+        )
+
+    def _resolve_temperature_sources(self):
+        """Validate and cache every configured temperature source at startup."""
+        bed = None
+        chamber = None
+        self.bed_sensor = None
+        self.chamber_sensor = None
+        self.chamber_is_heater = False
+
+        for device in self.devices:
+            device.hotend = None
+            device.mcu_sensor = None
+
+            if device.config_hotend:
+                device.hotend = self._config_heater(
+                    device, "heater_hotend", device.config_hotend
+                )
+
+            if device.config_bed:
+                bed = self._shared_temperature(
+                    bed, device, "heater_bed", device.config_bed
+                )
+
+            if device.config_heater_chamber:
+                chamber = self._shared_temperature(
+                    chamber,
+                    device,
+                    "heater_chamber",
+                    device.config_heater_chamber,
+                )
+            elif device.config_sensor_chamber:
+                chamber = self._shared_temperature(
+                    chamber,
+                    device,
+                    "sensor_chamber",
+                    device.config_sensor_chamber,
+                )
+
+            if device.config_sensor_mcu:
+                name = device.config_sensor_mcu
+                device.mcu_sensor = self._config_temperature(
+                    device,
+                    "sensor_mcu",
+                    name,
+                    (
+                        f"temperature_sensor {name}",
+                        f"temperature_fan {name}",
+                        name,
+                    ),
+                )
+
+        if bed is not None:
+            option, name, device = bed
+            self.bed_sensor = self._config_heater(device, option, name)
+
+        if chamber is not None:
+            option, name, device = chamber
+            if option == "heater_chamber":
+                self.chamber_sensor = self._config_heater(device, option, name)
+                self.chamber_is_heater = True
+            else:
+                self.chamber_sensor = self._config_temperature(
+                    device,
+                    option,
+                    name,
+                    (f"temperature_sensor {name}",),
+                )
 
     def _handle_update(self, eventtime):
         try:
@@ -1084,23 +1194,15 @@ class KnomiCluster:
 
     def _bed(self, eventtime):
         """Whichever bed any device configured. There is only one bed."""
-        for device in self.devices:
-            if device.config_bed:
-                return self.heaters.lookup_heater(device.config_bed).get_temp(eventtime)
+        if self.bed_sensor is not None:
+            return self.bed_sensor.get_temp(eventtime)
         return 0, 0
 
     def _chamber(self, eventtime):
         """Whichever chamber source any device configured. They cannot disagree."""
-        for device in self.devices:
-            if device.config_heater_chamber:
-                heater = self.heaters.lookup_heater(device.config_heater_chamber)
-                return heater.get_temp(eventtime)
-            if device.config_sensor_chamber:
-                sensor = self.printer.lookup_object(
-                    f"temperature_sensor {device.config_sensor_chamber}",
-                )
-                temp, _ = sensor.get_temp(eventtime)
-                return temp, 0
+        if self.chamber_sensor is not None:
+            temp, target = self.chamber_sensor.get_temp(eventtime)
+            return (temp, target) if self.chamber_is_heater else (temp, 0)
         return 0, 0
 
     def _track_job(self, state):
@@ -1231,10 +1333,26 @@ class Knomi_Serial:
                 "Run scripts/discover.py to see which id is on which port, or "
                 "read it off the waiting screen."
             )
+        if self.config_device_id is not None:
+            valid_device_id = (
+                len(self.config_device_id) == 6
+                and all(char in _HEX_DIGITS for char in self.config_device_id)
+            )
+            if not valid_device_id:
+                raise config.error(
+                    f"{self.name}: device_id '{self.config_device_id}' must be "
+                    "exactly six hexadecimal characters"
+                )
         #: Where device_id: resolved to, once discovery has found it.
         self.resolved_port = None
 
         self.config_tool = _normalize_tool(config.get("tool", None))
+        if self.config_tool and self.config_tool.isdigit():
+            if int(self.config_tool) > _INT32_MAX:
+                raise config.error(
+                    f"{self.name}: tool '{self.config_tool}' exceeds the "
+                    "signed 32-bit protocol field"
+                )
 
         self.config_hotend = config.get("heater_hotend", None)
         self.config_bed = config.get("heater_bed", None)
@@ -1247,6 +1365,7 @@ class Knomi_Serial:
             )
 
         self.config_sensor_mcu = config.get("sensor_mcu", None)
+        self.hotend = None
         self.mcu_sensor = None
 
         self.config_move = [
@@ -1255,9 +1374,9 @@ class Knomi_Serial:
             config.getfloat("move_z", 10.0),
         ]
         self.config_speed = [
-            config.getfloat("speed_x", 100.0),
-            config.getfloat("speed_y", 100.0),
-            config.getfloat("speed_z", 100.0),
+            config.getfloat("speed_x", 100.0, above=0.0),
+            config.getfloat("speed_y", 100.0, above=0.0),
+            config.getfloat("speed_z", 100.0, above=0.0),
         ]
 
         self.device_config = self._build_config(config)
@@ -1312,13 +1431,15 @@ class Knomi_Serial:
 
         def _color(key):
             def parse(raw):
-                text = str(raw).strip().lstrip("#")
-                try:
-                    return int(text, 16) & 0xFFFFFF
-                except ValueError:
+                text = str(raw).strip()
+                if text.startswith("#"):
+                    text = text[1:]
+                if len(text) != 6 or any(char not in _HEX_DIGITS for char in text):
                     raise config.error(
-                        f"{self.name}: {key}='{raw}' is not a hex colour",
-                    ) from None
+                        f"{self.name}: {key}='{raw}' must be exactly six "
+                        "hexadecimal characters",
+                    )
+                return int(text, 16)
 
             return parse
 
@@ -1330,9 +1451,16 @@ class Knomi_Serial:
                     raise config.error(
                         f"{self.name}: {key}='{raw}' is not a number",
                     ) from None
+                if not math.isfinite(seconds):
+                    raise config.error(f"{self.name}: {key} must be finite")
                 if seconds < 0:
                     raise config.error(f"{self.name}: {key} cannot be negative")
-                return int(seconds * 1000)
+                milliseconds = int(seconds * 1000)
+                if milliseconds > _UINT32_MAX:
+                    raise config.error(
+                        f"{self.name}: {key} exceeds the protocol limit"
+                    )
+                return milliseconds
 
             return parse
 
@@ -1530,21 +1658,6 @@ class Knomi_Serial:
         self.heaters = self.printer.lookup_object("heaters")
         self.toolhead = self.printer.lookup_object("toolhead")
 
-        if self.config_sensor_mcu:
-            self.mcu_sensor = (
-                self.printer.lookup_object(
-                    f"temperature_sensor {self.config_sensor_mcu}", None
-                )
-                or self.printer.lookup_object(
-                    f"temperature_fan {self.config_sensor_mcu}", None
-                )
-                or self.printer.lookup_object(self.config_sensor_mcu, None)
-            )
-            if not self.mcu_sensor:
-                logging.warning(
-                    f"{self.name}: Could not find sensor_mcu '{self.config_sensor_mcu}'"
-                )
-
     def _handle_shutdown(self):
         self._send_shutdown_state()
 
@@ -1570,9 +1683,8 @@ class Knomi_Serial:
             return
 
         hotend_temp, hotend_target = 0, 0
-        if self.config_hotend:
-            hotend = self.heaters.lookup_heater(self.config_hotend)
-            hotend_temp, hotend_target = hotend.get_temp(eventtime)
+        if self.hotend:
+            hotend_temp, hotend_target = self.hotend.get_temp(eventtime)
 
         mcu_temp, mcu_target = 0, 0
         if self.mcu_sensor:

@@ -152,7 +152,10 @@ HIGH, closed reads LOW. The supported Knomi V2 set is GPIO5, GPIO6, GPIO8,
 GPIO9, GPIO11, GPIO15, GPIO38–GPIO42, GPIO47, and GPIO48. The four pins above
 are preferred because their FPC nets are easy to identify. An old binding's
 pull-up is removed when the config changes. This has compiled successfully;
-live switch behavior still needs verification on a wired board.
+live switch behavior still needs verification on a wired board. The live
+acceptance checks for debounce, config replacement, and touch suppression are
+in [verification.md](verification.md#live-acceptance-checks); compilation alone does not
+complete them.
 
 Avoid **GPIO10** for a pull-up button input. R55 ties it to ground through 100K,
 and against the S3's ~45K internal pull-up that divides to roughly 2.28 V —

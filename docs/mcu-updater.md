@@ -30,12 +30,13 @@ curl -s 'localhost:7125/printer/objects/query?knomi_cluster'
 ```
 
 ```json
-{"T0_knomi": {"device_id": "19aa44",
+{"T0_knomi": {"section": "knomi_serial T0_knomi",
+              "device_id": "19aa44",
               "port": "/dev/ttyUSB0",
               "addressed_by": "device_id",
               "build_variant": "knomi",
-              "firmware_version": "0.5.0+54.g5509d4f",
-              "protocol_version": 5,
+              "firmware_version": "0.6.0",
+              "protocol_version": 6,
               "online": true,
               "tool": "0"}}
 ```
@@ -86,7 +87,7 @@ Then `~/printer_data/knomi/devices.json`:
 ```json
 {"version": 1,
  "devices": {"19aa44": {"port": "/dev/ttyUSB0",
-                        "fw": "0.5.0+54.g5509d4f",
+                        "fw": "0.6.0",
                         "var": "knomi"}}}
 ```
 
@@ -141,7 +142,7 @@ stopped and a display half-written.
 | | |
 | --- | --- |
 | `klippy_extras/knomi_serial.py` | imports under a plain `python3`, outside Klipper |
-| `discover_reports(ports=None, listen=None, skip=())` | all arguments optional |
+| `discover_reports(ports=None, listen=<default>, skip=())` | all arguments optional; omit `listen` for the module's normal discovery window |
 | its return | `{id: {...}}`, keyed by the lowercase hardware id |
 | each entry | carries at least `port`, `fw`, `var` |
 | `candidate_ports(skip=())` | is there anything to look at |
@@ -157,9 +158,23 @@ importing the module in a subprocess the way a consumer does — a Klipper-only
 import added at module scope would otherwise pass every test here and fail only
 during a flash.
 
+The Klipper status surface is also a tool-facing contract. When ready,
+`printer.knomi_cluster.devices` contains every configured section. Its key is
+the section's name part; each value carries `section`, `device_id`, `port`,
+`addressed_by`, `build_variant`, `firmware_version`, `protocol_version`,
+`online`, and `tool`. The per-section `knomi_serial` status adds `config_crc`,
+`device_config_crc`, and `config_applied` so an updater or diagnostic can tell
+what the host intended from what the display adopted. `tests/test_addressing.py`
+checks the named/bare section distinction and serial-path identity case; the
+importable discovery contract has its separate test above. A status field may
+be added, but removing or renaming one needs consumer coordination.
+
 ## Deciding whether to flash
 
 `firmware_version` / `fw` is the `VERSION` file plus git build metadata:
+
+These values illustrate the version format; they are not a claim about the
+firmware currently installed on any display.
 
 | | |
 | --- | --- |

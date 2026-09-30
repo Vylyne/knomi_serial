@@ -64,10 +64,11 @@ to be current, and lets the screen sleep on its normal timers again.
   - [Moonraker](#moonraker)
 - [Acknowledgements](#acknowledgements)
 
-Three documents sit outside this one:
-[docs/protocol.md](docs/protocol.md) for the wire format,
-[docs/mcu-updater.md](docs/mcu-updater.md) for what a flashing tool needs from
-this repo, and [docs/hardware.md](docs/hardware.md) for the pin map.
+For maintainers, [architecture](docs/architecture.md) maps the components and
+current limits, [decisions](docs/decisions.md) records the reasons behind the
+contracts, and [verification](docs/verification.md) tracks unfinished live
+checks. The [wire protocol](docs/protocol.md), [updater integration contract](docs/mcu-updater.md),
+and [hardware notes](docs/hardware.md) carry their respective technical details.
 [service/README.md](service/README.md) covers the watcher.
 
 ## Features
@@ -90,8 +91,10 @@ this repo, and [docs/hardware.md](docs/hardware.md) for the pin map.
 
 ## TODO
 
-- [ ] Verify Home/Move swipes and shared-button interactions on the panel.
-- [ ] Support corner switches wired directly to the display's GPIO pins.
+- [ ] Verify Home/Move swipes, shared-button routing, and command counts on a
+  safe Klipper instance; see [the live checklist](docs/verification.md).
+- [ ] Verify corner switches wired directly to display GPIO, including
+  debounce and config replacement; see [the live checklist](docs/verification.md).
 
 ## Using it
 

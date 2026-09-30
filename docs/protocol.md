@@ -237,7 +237,10 @@ button record index and pressed state as single bytes. `pressed` is 1 for press
 and 0 for release. The device accepts the event only if the CRC matches its
 current config, the index is in range, and that record has source `event`.
 Repeated presses and unmatched releases are ignored. A config replacement
-cancels held inputs without firing a release macro.
+cancels held inputs without firing a release macro. Edges queued by the serial
+or GPIO task retain their producer-observed config CRC; the UI drops them if
+that CRC no longer matches both its snapshot and the current config. An old
+edge cannot become an action in a new record at the same index.
 
 ## `MESSAGE` — up to 127 bytes
 
@@ -348,7 +351,8 @@ the property above.
 name:
 
 ```json
-{"T0_knomi": {"device_id": "19aa44", "port": "/dev/ttyUSB3",
+{"T0_knomi": {"section": "knomi_serial T0_knomi",
+              "device_id": "19aa44", "port": "/dev/ttyUSB3",
               "addressed_by": "device_id", "build_variant": "knomi",
               "firmware_version": "0.6.0", "protocol_version": 6,
               "online": true, "tool": "0"}}

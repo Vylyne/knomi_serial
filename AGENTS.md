@@ -18,6 +18,10 @@ sides to move together.
 - Read `docs/hardware.md` before changing pins or hardware assumptions.
 - Read `docs/mcu-updater.md` before changing identity, discovery, status, or
   flashing integration.
+- Read `docs/architecture.md` and `docs/decisions.md` before changing component
+  ownership, page/button behavior, or a documented design constraint.
+- Read `docs/verification.md` before claiming live button or page behavior is
+  complete.
 - Read `service/README.md` before changing the watcher or its installation.
 
 ## Project invariants

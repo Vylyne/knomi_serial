@@ -79,6 +79,10 @@ this repo, and [docs/hardware.md](docs/hardware.md) for the pin map.
 - [x] Coordinated multi-display and toolchanger support with per-tool targeting.
 - [x] Runtime-configurable pages, colours, readouts, brightness, sleep behavior,
   and touchscreen corner controls.
+- [ ] Named touch and host-forwarded button inputs with page, macro, and
+  observation actions (implemented; live interaction validation pending).
+- [x] Home and Move layouts captured on a live Knomi panel; their touch
+  controls checked on the panel.
 - [x] Link-health, firmware, protocol, configuration, and device status exposed
   through the Klipper object API.
 - [x] Host watcher, Moonraker update-manager integration, release images, and
@@ -86,7 +90,7 @@ this repo, and [docs/hardware.md](docs/hardware.md) for the pin map.
 
 ## TODO
 
-- [ ] Bring the inherited home and move pages into the current design language.
+- [ ] Verify Home/Move swipes and shared-button interactions on the panel.
 - [ ] Support corner switches wired directly to the display's GPIO pins.
 
 ## Using it
@@ -99,7 +103,17 @@ every page rather than several along. `estop_at: bottom` (the default) means
 drag up to reach it; `top` is the notification-shade gesture. It is never in
 `pages:` and cannot be configured away.
 
-The four corners are controls; see [the corner keys](#the-corner-keys).
+The Home page places X and Y on the upper diagonals, home-all in the centre,
+and tramming (QGL/ZTA) and Z on the lower diagonals. Move uses a four-way XY
+pad and a separate vertical Z rocker. These layouts build in firmware; real
+panel captures are shown below. Home and Move touch controls have been checked
+on the panel; swipe checks are still pending.
+See [the corner keys](#the-corner-keys) for how hardware can take over a
+position. The light rings on Home indicate axes already homed; QGL has no
+homed-state ring. A visible shared binding at NE or SE brings both Z controls
+closer together along the right edge.
+
+![Home page with QGL available](docs/img/home.png) ![Move page](docs/img/move.png) ![Move with FEED at NE and RETRACT at SE](docs/img/move-shared.png)
 
 ## Scope, and what is finished
 
@@ -109,9 +123,9 @@ share is computed once rather than once per screen. That is the case the design
 is worked out against.
 
 Single-toolhead machines are supported by the same firmware, but they are the
-secondary target and it shows: the `home` and `move` pages have not been brought
-into the same design language as the rest. They work; they look like the
-firmware this was forked from.
+secondary target. The `home` and `move` pages now use the same circular marks,
+accent colour, and dark scrims as the other pages. Both pages' touch controls
+have been checked on the panel; swipes still need review.
 
 <table>
   <tr><th align="left">Area</th><th align="left">State</th></tr>
@@ -119,9 +133,9 @@ firmware this was forked from.
   <tr><td>G-code page</td></tr>
   <tr><td>Printing screen</td></tr>
   <tr><td>Emergency stop page</td></tr>
-  <tr><td>Home and move pages</td><td>inherited, not yet reworked</td></tr>
+  <tr><td>Home and move pages</td><td>captured on COM5; touch checked; swipe and shared-button review pending</td></tr>
   <tr><td>Corner keys as touch targets</td><td>working</td></tr>
-  <tr><td>Corner keys from the display's own GPIO</td><td>not implemented, <a href="#the-corner-keys">see below</a></td></tr>
+  <tr><td>Corner keys from the display's own GPIO</td><td>firmware builds; live wiring and switch verification pending, <a href="#the-corner-keys">see below</a></td></tr>
 </table>
 
 ## Installation
@@ -390,36 +404,104 @@ actually running what was sent.
 
 ## The corner keys
 
-Four controls sit on the diagonals, where a round layout has room to spare and
-where physical keys can go. The lower pair is context-aware — load and unload on
-the tool page, pause and cancel while printing — and the upper pair is reserved
-for feed and retract, which on this machine are wired to the filament buffer and
-work with the host down.
+The four diagonal positions are `NW`, `NE`, `SW`, and `SE`; `C` is the centre.
+A binding can use `touch` (the glass), `gpio` (a switch wired to Knomi), or
+`event` (a press and release forwarded from Klipper). Up to eight named
+bindings fit in one display section. Without any button options the existing
+touch page actions still work.
 
-By default all four are **soft keys**: the glass is the button, and a bare
-display needs no wiring to be fully usable.
+Each binding has a resolver:
+
+| Resolver | Action |
+| --- | --- |
+| `page` | The action the visible page assigns to that slot. |
+| `gcode_macro NAME` | Run a named Klipper macro on committed release. |
+| `observe FEED` / `observe RETRACT` | Show the local press state of an external feed/retract action; Knomi does not start the action. |
+| `internal` | Reserved; currently rejected until a specific internal action exists. |
+
+Define one `button_name:` option per input in the display's existing section.
+Each indented line has one `property=value`; property names and values such as
+`source` are case-insensitive. The option suffix is the button's stable name.
 
 ```ini
-hardware_keys: NW, NE   # any of NW NE SW SE, comma or space separated
+[knomi_serial T0_knomi]
+device_id: 19aa44
+
+button_load:
+    source=gpio
+    pin=GPIO5
+    slot=SW
+    resolver=page
+
+button_feed:
+    source=event
+    slot=NW
+    resolver=observe FEED
+
+button_retract:
+    source=event
+    resolver=observe RETRACT
+
+button_check:
+    source=touch
+    slot=C
+    legend=CHK
+    resolver=gcode_macro CHECK_TOOL_FILAMENT_SENSORS
+
+button_light:
+    source=event
+    slot=NONE
+    press_resolver=gcode_macro LIGHT_ON
+    release_resolver=gcode_macro LIGHT_OFF
 ```
 
-Listing a corner keeps its symbol exactly where it is, as a **legend**, and
-removes its touch target. Nothing on screen moves in that transition, which is
-the point of putting the soft keys on the diagonals first — the positions are
-learned before the hardware arrives.
+`slot=NONE` (the default) leaves the screen position free. An observed GPIO or
+host-event button still tracks FEED/RETRACT with no slot, but draws no mark and
+does not displace that page's soft button. Give it a slot to show its derived
+F/R mark. Visible macro buttons need a one to four character printable ASCII
+`legend`; a slotless button cannot have one. `page` and `observe` derive their
+marks and cannot take `legend`. `pin` is required only for GPIO. One configured
+binding can own a slot, and a touch binding must have a visible slot. Invalid
+combinations fail at Klipper startup and name the section, option, property,
+and value.
 
-**This option does not define pins.** It only tells the display to stop offering
-an action that something else already reports. Where the pin is declared depends
-on which board the switch is wired to:
+For a host-side switch or macro, forward both edges using its button name:
 
-- **To the Klipper host.** Declare it as a standard Klipper
-  [`[gcode_button]`](https://www.klipper3d.org/Config_Reference.html#gcode_button)
-  with its own `pin:` and `press_gcode:`. Klipper reads the switch; the display
-  just stops duplicating it.
-- **To the display itself.** Not implemented yet. Every free GPIO on the Knomi
-  V2 sits behind the unpopulated U10 camera FPC, which needs a breakout before
-  anything can be soldered — see [docs/hardware.md](docs/hardware.md) for the
-  pin map, the four pins worth using, and the two that will bite you.
+```gcode
+KNOMI_BUTTON SCREEN=T0_knomi BUTTON=feed PRESSED=1
+KNOMI_BUTTON SCREEN=T0_knomi BUTTON=feed PRESSED=0
+```
+
+`SCREEN=` names one display. `TOOL=` may reach several, using the same rules
+as `KNOMI_TOOL` below; neither is needed with one display. Every target is
+validated before an event is sent. Button names are case-insensitive. A bare
+`resolver=gcode_macro NAME` runs on release; the optional `press_resolver`
+and `release_resolver` form supports separate macros for each edge. These
+properties are exclusive with bare `resolver`. A canceled touch or config
+change never fires a release macro.
+
+GPIO inputs close to Knomi ground and use its internal pull-up. Firmware polls
+every 5 ms and accepts an edge after 20 ms stable. Supported Knomi V2 pins are
+GPIO5, GPIO6, GPIO8, GPIO9, GPIO11, GPIO15, GPIO38–GPIO42, GPIO47, and
+GPIO48; GPIO5/6/8/9 are preferred. See [docs/hardware.md](docs/hardware.md)
+before wiring. The GPIO path builds, but has not yet passed a live switch test.
+
+The older `hardware_keys: NW, NE` option remains for configs that already have
+external controls. It only suppresses touch; it does not declare a pin, name,
+or action. Do not claim the same slot with `hardware_keys` and `button_name`.
+New installations should use named buttons so ownership and lifecycle are
+explicit.
+
+On Home, a named shared binding moves that page's displaced action to a smaller
+inner touch control. A legacy `hardware_keys` position only suppresses touch
+at its original position; it does not create a new action. Configuring all five
+positions as named shared bindings while Home is enabled fails at startup,
+because the round page cannot show five displaced actions without overlapping
+targets. Shared touch targets shrink to their 38-pixel marks on Move so they
+do not cover jog controls. A visible shared NE or SE mark brings both Move Z
+controls toward the middle along the right edge; a slotless observed button
+does not. The overlay is hidden on the E-stop page; wired GPIO and host-forwarded
+inputs still work there.
 
 ## Telling the screens about the job
 
@@ -564,10 +646,18 @@ serial link — the display has no network, no filesystem and no second port.
 ```bash
 python scripts/screenshot.py COM5 --drive printing -o docs/img/printing.png
 python scripts/screenshot.py COM5 -o now.png     # whatever is on screen now
+python scripts/screenshot.py COM5 --drive idle --page home --tram qgl -o home.png
+python scripts/screenshot.py COM5 --drive idle --page move --slotless-buttons -o move.png
+python scripts/screenshot.py COM5 --drive idle --page move --shared-buttons -o move-shared.png
 ```
 
 About fourteen seconds a frame. `--drive` feeds the display a state first, so a
 documentation shot does not depend on catching the printer in the right mood.
+`--page` makes one idle page the complete configured page list, so it is also
+the landing page; no swipe or screenshot-only firmware command is involved.
+`--slotless-buttons` adds FEED/RETRACT event observers without claiming any
+screen slots; `--shared-buttons` places the same demo observers at NE/SE. This
+captures both Move layouts without Klipper or physical switches.
 See [docs/protocol.md](docs/protocol.md) for how it works.
 
 ### Checks

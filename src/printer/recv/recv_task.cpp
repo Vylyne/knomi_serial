@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "printer/config.h"
+#include "input/button_input.h"
 #include "printer/printer.h"
 #include "printer/send/send_cmd.h"
 
@@ -46,6 +47,8 @@ namespace printer
     //: A snapshot has been asked for and not yet started.
     static volatile bool _snapshot_wanted = false;
 
+    static const unsigned int kButtonEventWireSize = 6;
+
     //: Whether the message on screen is one of ours rather than the host's.
     //:
     //: A local fault - a malformed frame, a length that made no sense - is only
@@ -58,6 +61,7 @@ namespace printer
     static bool _footer_at(size_t len);
     static void _take_state(size_t len);
     static void _take_message(size_t len);
+    static void _take_button_event(size_t len);
 
     void recv_task(void *param)
     {
@@ -111,7 +115,9 @@ namespace printer
             _take_state(len);
             break;
           case Frame::kConfig:
-            config::apply(_buf, len);
+            if (!config::apply(_buf, len)) {
+              _fault("BAD\nCONFIG");
+            }
             break;
           case Frame::kMessage:
             _take_message(len);
@@ -121,6 +127,9 @@ namespace printer
             // and reading the flush callback, both of which belong to the
             // LVGL task.
             _snapshot_wanted = true;
+            break;
+          case Frame::kButtonEvent:
+            _take_button_event(len);
             break;
           default:
             // A newer host sending a frame this build has no name for is not an
@@ -201,6 +210,38 @@ namespace printer
         return UINT32_MAX;
       }
       return millis() - at;
+    }
+
+    static void _take_button_event(size_t len)
+    {
+      if (len != kButtonEventWireSize || _buf[5] > 1)
+      {
+        _fault("BAD\nBUTTON");
+        return;
+      }
+
+      uint32_t crc = 0;
+      memcpy(&crc, _buf, sizeof(crc));
+      crc = ntohl(crc);
+      if (crc != config::held_crc())
+      {
+        // Queued against an older config. It must not acquire a new meaning.
+        return;
+      }
+
+      uint8_t index = _buf[4];
+      const Config &conf = config::get();
+      if (index >= kMaxButtons ||
+          conf.buttons[index].source != ButtonSource::kEvent)
+      {
+        _fault("BAD\nBUTTON");
+        return;
+      }
+
+      if (!input::button::enqueue(index, _buf[5] != 0, crc))
+      {
+        _fault("BUTTON\nQUEUE");
+      }
     }
 
     static void _take_message(size_t len)

@@ -1,6 +1,7 @@
 #include "corner.h"
 
 #include "board_conf.h"
+#include "input/button_input.h"
 #include "printer/config.h"
 #include "ui/theme.h"
 #include "user_conf.h"
@@ -20,8 +21,12 @@ bool is_soft(Slot slot) {
   case Slot::kNE: bit = printer::kKeyNE; break;
   case Slot::kSW: bit = printer::kKeySW; break;
   case Slot::kSE: bit = printer::kKeySE; break;
+  case Slot::kC:
+  case Slot::kNone:
+    return false;
   }
-  return (printer::config::get().key_mask & bit) == 0;
+  return (printer::config::get().key_mask & bit) == 0 &&
+         input::button::slot_touch_enabled(slot);
 }
 
 bool is_left(Slot slot) {
@@ -30,6 +35,21 @@ bool is_left(Slot slot) {
 
 bool is_top(Slot slot) {
   return slot == Slot::kNW || slot == Slot::kNE;
+}
+
+void _touch_event(lv_event_t *event) {
+  Slot slot = (Slot)(uintptr_t)lv_event_get_user_data(event);
+  input::button::Phase phase;
+  switch (lv_event_get_code(event)) {
+  case LV_EVENT_PRESSED: phase = input::button::Phase::kPress; break;
+  case LV_EVENT_RELEASED: phase = input::button::Phase::kRelease; break;
+  case LV_EVENT_PRESS_LOST:
+  case LV_EVENT_DELETE: phase = input::button::Phase::kCancel; break;
+  default: return;
+  }
+  lv_obj_t *target = static_cast<lv_obj_t *>(lv_event_get_target(event));
+  lv_obj_t *owner = lv_obj_get_parent(target);
+  input::button::page_event(owner, slot, phase);
 }
 
 //: Where the mark goes: on the diagonal, at the bezel, where the key is.
@@ -52,7 +72,11 @@ void region_pos(Slot slot, int32_t *x, int32_t *y) {
 
 lv_obj_t *create(
     lv_obj_t *parent, Slot slot, const char *symbol, lv_color_t color,
-    lv_event_cb_t cb) {
+    input::button::page_action_t action, void *context) {
+  if (input::button::slot_claimed(slot) ||
+      !input::button::register_page_action(parent, slot, action, context)) {
+    return nullptr;
+  }
   // The hit area, and nothing to look at. Created before the mark so it never
   // draws over it, and a sibling rather than its parent so the mark can sit on
   // the diagonal without being clipped to the region's box.
@@ -65,9 +89,13 @@ lv_obj_t *create(
   region_pos(slot, &rx, &ry);
   lv_obj_align(region, LV_ALIGN_TOP_LEFT, rx, ry);
 
-  if (cb && is_soft(slot)) {
+  if (action && is_soft(slot)) {
     lv_obj_add_flag(region, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(region, cb, LV_EVENT_CLICKED, nullptr);
+    void *data = (void *)(uintptr_t)slot;
+    lv_obj_add_event_cb(region, _touch_event, LV_EVENT_PRESSED, data);
+    lv_obj_add_event_cb(region, _touch_event, LV_EVENT_RELEASED, data);
+    lv_obj_add_event_cb(region, _touch_event, LV_EVENT_PRESS_LOST, data);
+    lv_obj_add_event_cb(region, _touch_event, LV_EVENT_DELETE, data);
   } else {
     // With a switch behind it the glass should do nothing - two ways to fire
     // the same action, one of them invisible, is a way to fire it by accident.

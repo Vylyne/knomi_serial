@@ -100,6 +100,7 @@ def test_frame_types():
     # scripts/screenshot.py does. Named here so that renumbering the enum has
     # to come past this test.
     check("kSnapshot", frames["kSnapshot"], 0x04)
+    check("kButtonEvent", frames["kButtonEvent"], k._FRAME_BUTTON_EVENT)
 
 
 def test_status_values():
@@ -129,6 +130,7 @@ def test_config_presence_bits():
         "kHasPageOrder": k._HAS_PAGE_ORDER,
         "kHasEstopAt": k._HAS_ESTOP_AT,
         "kHasReadouts": k._HAS_READOUTS,
+        "kHasButtons": k._HAS_BUTTONS,
     }
     check("presence bit count", sorted(bits), sorted(expected))
     for member, value in expected.items():
@@ -170,12 +172,55 @@ def test_key_slot_bits():
         check(member, value, k._KEY_SLOTS[member[4:]])  # kKeyNW -> NW
 
 
+def test_button_protocol_values():
+    check("button count", const("kMaxButtons"), k._MAX_BUTTONS)
+    check("button record size", const("kButtonWireSize"), k._BUTTON_SIZE)
+
+    sources = enum_values("ButtonSource")
+    for member, name in {
+        "kNone": "NONE", "kTouch": "TOUCH", "kGpio": "GPIO",
+        "kEvent": "EVENT",
+    }.items():
+        check(f"ButtonSource::{member}", sources[member], k.ButtonSource[name].value)
+
+    slots = enum_values("ButtonSlot")
+    for member, name in {
+        "kNone": "NONE", "kNW": "NW", "kNE": "NE", "kC": "C",
+        "kSW": "SW", "kSE": "SE",
+    }.items():
+        check(f"ButtonSlot::{member}", slots[member], k.ButtonSlot[name].value)
+
+    resolvers = enum_values("ButtonResolver")
+    for member, name in {
+        "kNone": "NONE", "kPage": "PAGE", "kGcodeMacro": "GCODE_MACRO",
+        "kObserve": "OBSERVE", "kInternal": "INTERNAL",
+    }.items():
+        check(
+            f"ButtonResolver::{member}",
+            resolvers[member],
+            k.ButtonResolver[name].value,
+        )
+
+    profiles = enum_values("ButtonProfile")
+    for member, name in {
+        "kNone": "NONE", "kFeed": "FEED", "kRetract": "RETRACT",
+    }.items():
+        check(f"ButtonProfile::{member}", profiles[member], k.ButtonProfile[name].value)
+
+    flags = enum_values("ButtonFlags")
+    check("bare flag", flags["kButtonBare"], k._BUTTON_FLAG_BARE)
+    check("press flag", flags["kButtonPress"], k._BUTTON_FLAG_PRESS)
+    check("release flag", flags["kButtonRelease"], k._BUTTON_FLAG_RELEASE)
+
+
 def test_frames_are_well_formed():
     """Framing is HEADER(4) TYPE(1) LEN(2) PAYLOAD FOOTER(4)."""
     cases = [
         ("state", k.encode_state(k.PrinterState()), k._FRAME_STATE, k._STATE_SIZE),
         ("config", k.encode_config(k.DeviceConfig()), k._FRAME_CONFIG, k._CONFIG_SIZE),
         ("message", k.encode_message("hi"), k._FRAME_MESSAGE, 2),
+        ("button event", k.encode_button_event(0x12345678, 3, True),
+         k._FRAME_BUTTON_EVENT, 6),
     ]
     for label, frame, want_type, want_len in cases:
         check(f"{label} header", frame[:4], k._HEADER)
@@ -202,6 +247,50 @@ def test_config_crc_is_over_the_payload_alone():
     payload = k.config_payload(config)
     frame = k.encode_config(config)
     check("payload is the frame body", payload, frame[7:-4])
+
+
+def test_button_records_are_fixed_width_and_zero_padded():
+    binding = k.ButtonBinding(
+        name="feed",
+        source=k.ButtonSource.GPIO,
+        slot=k.ButtonSlot.NW,
+        resolver=k.ButtonResolver.OBSERVE,
+        pin=5,
+        argument=k.ButtonProfile.FEED.value,
+    )
+    config = k.DeviceConfig(present=k._HAS_BUTTONS, buttons=(binding,))
+    payload = k.config_payload(config)
+    check(
+        "first record",
+        payload[36:48],
+        bytes((2, 1, 3, 0, 5, 1, 0, 0, 0, 0, 0, 0)),
+    )
+    check("unused records", payload[48:132], bytes(84))
+
+
+def test_visible_macro_record_carries_only_its_short_legend():
+    binding = k.ButtonBinding(
+        name="lights",
+        source=k.ButtonSource.TOUCH,
+        slot=k.ButtonSlot.C,
+        resolver=k.ButtonResolver.GCODE_MACRO,
+        legend=b"LGT",
+        macro="TOGGLE_LIGHTS",
+        release_macro="TOGGLE_LIGHTS",
+    )
+    payload = k.config_payload(k.DeviceConfig(buttons=(binding,)))
+    check(
+        "macro record",
+        payload[36:48],
+        bytes((1, 3, 2, 1, 0xFF, 0)) + b"LGT\0\0\0",
+    )
+    if b"TOGGLE_LIGHTS" in payload:
+        raise AssertionError("macro text leaked into the device config")
+
+
+def test_button_event_payload_is_crc_scoped_and_big_endian():
+    frame = k.encode_button_event(0x12345678, 3, False)
+    check("event payload", frame[7:-4], b"\x12\x34\x56\x78\x03\x00")
 
 
 def main():

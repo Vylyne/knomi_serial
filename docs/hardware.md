@@ -129,8 +129,9 @@ are internally common, which would tie the two boards' grounds together and
 defeat the point.
 
 For the Knomi's side of that switch, **direct GPIO through U10 beats an I²C
-expander** now that the FPC is broken out. Four pins, native interrupts,
-sub-millisecond, and nothing shared with the touch panel. An expander on U6
+expander** now that the FPC is broken out. Four pins, nothing shared with the
+touch panel, and a firmware poll every 5 ms with 20 ms stable-state debounce.
+An expander on U6
 remains a reasonable fallback purely on mechanical grounds — a crimped JST
 connector will not walk out of its latch the way a 0.5 mm ribbon can — but it
 polls, and its interrupt line has nowhere to land on a four-pin connector.
@@ -144,6 +145,14 @@ usable internal pull-ups:
 | 6 | `D8` |
 | 8 | `D9` |
 | 9 | `HREF` |
+
+The first implementation configures only GPIO bindings named in `printer.cfg`
+as `INPUT_PULLUP`. Wire each switch from its GPIO to Knomi ground: open reads
+HIGH, closed reads LOW. The supported Knomi V2 set is GPIO5, GPIO6, GPIO8,
+GPIO9, GPIO11, GPIO15, GPIO38–GPIO42, GPIO47, and GPIO48. The four pins above
+are preferred because their FPC nets are easy to identify. An old binding's
+pull-up is removed when the config changes. This has compiled successfully;
+live switch behavior still needs verification on a wired board.
 
 Avoid **GPIO10** for a pull-up button input. R55 ties it to ground through 100K,
 and against the S3's ~45K internal pull-up that divides to roughly 2.28 V —

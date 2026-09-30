@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import re
 import struct
 import time
 import zlib
@@ -31,6 +32,7 @@ _FOOTER = b"\xf0\x07\xf0\x07"
 _FRAME_STATE = 0x01
 _FRAME_CONFIG = 0x02
 _FRAME_MESSAGE = 0x03
+_FRAME_BUTTON_EVENT = 0x05
 
 _RECV_PERIOD = 0.1
 _SEND_PERIOD = 0.1
@@ -67,7 +69,9 @@ _UNKNOWN = -1
 #: 5: dropped eta, elapsed, layer and layer_total - nothing read them - and
 #:    made the secondary readouts a configured list. The MCU pair stayed and is
 #:    now shown: on a toolchanger that MCU sits in the heated chamber.
-_PROTO_VERSION = 5
+#: 6: config carries fixed button bindings and BUTTON_EVENT forwards a named
+#:    host event by CRC-scoped record index.
+_PROTO_VERSION = 6
 
 #: The state frame's payload, field for field against `struct State` in
 #: src/printer/printer.h, down to and including filament_type. `!` means network
@@ -85,7 +89,9 @@ _STATE_SIZE = struct.calcsize(_STATE_FMT)
 
 #: The config frame's payload, against `struct Config`. The fourth byte was
 #: padding until estop_at claimed it, which is why the size did not change.
-_CONFIG_FMT = "!5I4B4B8B256s"
+_BUTTON_FMT = "!6B4s2x"
+_BUTTON_SIZE = struct.calcsize(_BUTTON_FMT)
+_CONFIG_FMT = "!5I4B4B8B96s256s"
 _CONFIG_SIZE = struct.calcsize(_CONFIG_FMT)
 
 #: Page ids, against `enum class Page`. Order in the list is the order on the
@@ -109,6 +115,7 @@ _HAS_KEY_MASK = 1 << 7
 _HAS_PAGE_ORDER = 1 << 8
 _HAS_ESTOP_AT = 1 << 9
 _HAS_READOUTS = 1 << 10
+_HAS_BUTTONS = 1 << 11
 
 #: Secondary readout ids, against `enum class Readout`. Which of these a screen
 #: shows is a fact about the machine: a single-toolhead printer wants its bed,
@@ -128,6 +135,12 @@ _ESTOP_AT = {"bottom": 0, "top": 1}
 #: already reports that press.
 _KEY_SLOTS = {"NW": 1 << 0, "NE": 1 << 1, "SW": 1 << 2, "SE": 1 << 3}
 
+_MAX_BUTTONS = 8
+_BUTTON_PINS = frozenset((5, 6, 8, 9, 11, 15, 38, 39, 40, 41, 42, 47, 48))
+_BUTTON_FLAG_BARE = 1 << 0
+_BUTTON_FLAG_PRESS = 1 << 1
+_BUTTON_FLAG_RELEASE = 1 << 2
+
 #: Used only if the VERSION file cannot be found next to this module, which
 #: happens if knomi_serial.py was copied into klippy/extras rather than
 #: symlinked there by install.sh.
@@ -142,6 +155,7 @@ _CMD_MAX_LEN = 512
 _CMD_STOP = b"STOP"
 _CMD_RESTART = b"RESTART"
 _CMD_GCODE = b"GCODE:"
+_CMD_BUTTON = b"BUTTON:"
 _CMD_MOVE = b"MOVE:"
 _CMD_REPORT = b"RPT:"
 _CMD_CONFIG_REQUEST = b"CFG?"
@@ -470,6 +484,12 @@ def encode_config(config):
     return encode_frame(_FRAME_CONFIG, config_payload(config))
 
 
+def encode_button_event(config_crc, button_index, pressed):
+    """One host-forwarded button edge, scoped to the config that named it."""
+    payload = struct.pack("!IBB", config_crc, button_index, int(bool(pressed)))
+    return encode_frame(_FRAME_BUTTON_EVENT, payload)
+
+
 def config_payload(config):
     """The config frame's payload alone, which is what gets hashed.
 
@@ -489,6 +509,7 @@ def config_payload(config):
         config.estop_at,
         *_fixed(config.readouts, _MAX_READOUTS),
         *_page_bytes(config.pages),
+        _button_bytes(config.buttons),
         config.gcodes,
     )
 
@@ -502,6 +523,31 @@ def _fixed(ids, width):
     """An id list padded and zero-terminated to a fixed width."""
     out = list(ids)[:width]
     return out + [0] * (width - len(out))
+
+
+def _button_bytes(buttons):
+    records = bytearray()
+    for binding in tuple(buttons)[:_MAX_BUTTONS]:
+        flags = 0
+        if binding.macro is not None:
+            flags |= _BUTTON_FLAG_BARE
+        else:
+            if binding.press_macro is not None:
+                flags |= _BUTTON_FLAG_PRESS
+            if binding.release_macro is not None:
+                flags |= _BUTTON_FLAG_RELEASE
+        records += struct.pack(
+            _BUTTON_FMT,
+            binding.source.value,
+            binding.slot.value,
+            binding.resolver.value,
+            flags,
+            binding.pin,
+            binding.argument,
+            binding.legend,
+        )
+    records += bytes((_MAX_BUTTONS * _BUTTON_SIZE) - len(records))
+    return bytes(records)
 
 
 def encode_message(text):
@@ -526,6 +572,278 @@ def _normalize_tool(value):
     return text or None
 
 
+def _button_error(config, section, option, prop, value, reason):
+    shown = "<missing>" if value is None else str(value)
+    raise config.error(
+        f"{section}: {option} property {prop}='{shown}' {reason}"
+    )
+
+
+def _resolver_value(config, section, option, prop, raw, edge=False):
+    text = str(raw).strip()
+    parts = text.split(maxsplit=1)
+    kind = parts[0].lower() if parts else ""
+    argument = parts[1].strip() if len(parts) == 2 else ""
+    if edge and kind != "gcode_macro":
+        _button_error(
+            config, section, option, prop, raw,
+            "must be 'gcode_macro NAME'",
+        )
+    if kind == "gcode_macro":
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", argument):
+            _button_error(
+                config, section, option, prop, raw,
+                "requires one macro name with no arguments",
+            )
+        return ButtonResolver.GCODE_MACRO, 0, argument
+    if kind == "page" and not argument and not edge:
+        return ButtonResolver.PAGE, 0, None
+    if kind == "observe" and not edge:
+        try:
+            profile = ButtonProfile[argument.upper()]
+        except KeyError:
+            _button_error(
+                config, section, option, prop, raw,
+                "must name the FEED or RETRACT profile",
+            )
+        if profile is ButtonProfile.NONE:
+            _button_error(
+                config, section, option, prop, raw,
+                "must name the FEED or RETRACT profile",
+            )
+        return ButtonResolver.OBSERVE, profile.value, None
+    if kind == "internal" and not edge:
+        _button_error(
+            config, section, option, prop, raw,
+            "has no implemented internal action",
+        )
+    _button_error(
+        config, section, option, prop, raw,
+        "is not a supported resolver",
+    )
+
+
+def _parse_buttons(config, section, hardware_mask):
+    options = config.get_prefix_options("button_")
+    if len(options) > _MAX_BUTTONS:
+        option = sorted(options, key=str.lower)[_MAX_BUTTONS]
+        _button_error(
+            config, section, option, "count", len(options),
+            f"exceeds at most {_MAX_BUTTONS} buttons",
+        )
+
+    bindings = []
+    names = {}
+    slots = {}
+    pins = {}
+    allowed = {
+        "source", "pin", "slot", "legend", "resolver",
+        "press_resolver", "release_resolver",
+    }
+
+    for option in sorted(options, key=str.lower):
+        name = option[len("button_"):].strip()
+        canonical = name.lower()
+        if not name:
+            _button_error(config, section, option, "name", name, "cannot be empty")
+        if canonical in names:
+            raise config.error(
+                f"{section}: {option} duplicates {names[canonical]} "
+                f"as button name '{name}'"
+            )
+        names[canonical] = option
+
+        properties = {}
+        for raw_line in str(config.get(option, "")).splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if "=" not in line:
+                _button_error(
+                    config, section, option, "line", line,
+                    "must be property=value",
+                )
+            raw_key, raw_value = line.split("=", 1)
+            key = raw_key.strip().lower()
+            value = raw_value.strip()
+            if key not in allowed:
+                _button_error(
+                    config, section, option, key or "property", value,
+                    "is not a supported property",
+                )
+            if key in properties:
+                _button_error(
+                    config, section, option, key, value,
+                    "is specified more than once",
+                )
+            properties[key] = value
+
+        source_raw = properties.get("source")
+        try:
+            source = ButtonSource[str(source_raw).strip().upper()]
+        except KeyError:
+            _button_error(
+                config, section, option, "source", source_raw,
+                "must be touch, gpio, or event",
+            )
+        if source is ButtonSource.NONE:
+            _button_error(
+                config, section, option, "source", source_raw,
+                "must be touch, gpio, or event",
+            )
+
+        slot_raw = properties.get("slot", "NONE")
+        try:
+            slot = ButtonSlot[slot_raw.strip().upper()]
+        except KeyError:
+            _button_error(
+                config, section, option, "slot", slot_raw,
+                "must be NW, NE, C, SW, SE, or NONE",
+            )
+
+        pin_raw = properties.get("pin")
+        pin = 0xFF
+        if source is ButtonSource.GPIO:
+            if pin_raw is None:
+                _button_error(
+                    config, section, option, "pin", None,
+                    "is required for source=gpio",
+                )
+            pin_text = pin_raw.strip().upper()
+            if pin_text.startswith("GPIO"):
+                pin_text = pin_text[4:]
+            try:
+                pin = int(pin_text, 10)
+            except ValueError:
+                _button_error(
+                    config, section, option, "pin", pin_raw,
+                    "must be a supported GPIO number",
+                )
+            if pin not in _BUTTON_PINS:
+                _button_error(
+                    config, section, option, "pin", pin_raw,
+                    "is not a supported button GPIO",
+                )
+            if pin in pins:
+                raise config.error(
+                    f"{section}: {option} property pin='{pin}' duplicates "
+                    f"{pins[pin]}"
+                )
+            pins[pin] = option
+        elif pin_raw is not None:
+            _button_error(
+                config, section, option, "pin", pin_raw,
+                "is only valid for source=gpio",
+            )
+
+        resolver_raw = properties.get("resolver")
+        press_raw = properties.get("press_resolver")
+        release_raw = properties.get("release_resolver")
+        if resolver_raw is not None and (press_raw is not None or release_raw is not None):
+            _button_error(
+                config, section, option, "resolver", resolver_raw,
+                "is mutually exclusive with press_resolver and release_resolver",
+            )
+        if resolver_raw is None and press_raw is None and release_raw is None:
+            _button_error(
+                config, section, option, "resolver", None,
+                "is required",
+            )
+
+        macro = None
+        press_macro = None
+        release_macro = None
+        argument = 0
+        if resolver_raw is not None:
+            resolver, argument, macro = _resolver_value(
+                config, section, option, "resolver", resolver_raw)
+            if resolver is ButtonResolver.GCODE_MACRO:
+                release_macro = macro
+        else:
+            resolver = ButtonResolver.GCODE_MACRO
+            if press_raw is not None:
+                _, _, press_macro = _resolver_value(
+                    config, section, option, "press_resolver", press_raw, True)
+            if release_raw is not None:
+                _, _, release_macro = _resolver_value(
+                    config, section, option, "release_resolver", release_raw, True)
+
+        legend_raw = properties.get("legend")
+        legend = b""
+        if legend_raw is not None:
+            try:
+                legend = legend_raw.encode("ascii")
+            except UnicodeEncodeError:
+                legend = b""
+            if not 1 <= len(legend) <= 4 or any(byte < 0x20 or byte > 0x7E for byte in legend):
+                _button_error(
+                    config, section, option, "legend", legend_raw,
+                    "must be one to four printable ASCII characters",
+                )
+
+        if slot is not ButtonSlot.NONE:
+            if slot in slots:
+                raise config.error(
+                    f"{section}: {option} property slot='{slot.name}' duplicates "
+                    f"{slots[slot]}"
+                )
+            slots[slot] = option
+            legacy_bit = _KEY_SLOTS.get(slot.name, 0)
+            if hardware_mask & legacy_bit:
+                _button_error(
+                    config, section, option, "slot", slot.name,
+                    "also appears in hardware_keys",
+                )
+
+        if source is ButtonSource.TOUCH and slot is ButtonSlot.NONE:
+            _button_error(
+                config, section, option, "slot", slot.name,
+                "must be visible for source=touch",
+            )
+        if resolver in (ButtonResolver.PAGE, ButtonResolver.OBSERVE):
+            if resolver is ButtonResolver.PAGE and slot is ButtonSlot.NONE:
+                _button_error(
+                    config, section, option, "slot", slot.name,
+                    "must be visible for resolver=page",
+                )
+            if legend_raw is not None:
+                _button_error(
+                    config, section, option, "legend", legend_raw,
+                    "is derived from the page or observe profile",
+                )
+        if resolver is ButtonResolver.OBSERVE and source is ButtonSource.TOUCH:
+            _button_error(
+                config, section, option, "resolver", resolver_raw,
+                "cannot observe an action synthesized by touch",
+            )
+        if resolver is ButtonResolver.GCODE_MACRO:
+            if slot is ButtonSlot.NONE and legend_raw is not None:
+                _button_error(
+                    config, section, option, "legend", legend_raw,
+                    "requires a visible slot",
+                )
+            if slot is not ButtonSlot.NONE and not legend:
+                _button_error(
+                    config, section, option, "legend", legend_raw,
+                    "is required for a visible gcode_macro button",
+                )
+
+        bindings.append(ButtonBinding(
+            name=canonical,
+            source=source,
+            slot=slot,
+            resolver=resolver,
+            pin=pin,
+            argument=argument,
+            legend=legend,
+            macro=macro,
+            press_macro=press_macro,
+            release_macro=release_macro,
+        ))
+
+    return tuple(bindings)
+
+
 class PrinterStatus(enum.Enum):
     DISCONNECTED = 0x00
     IDLE = 0x01
@@ -537,6 +855,52 @@ class PrinterTramType(enum.Enum):
     NONE = 0x00
     ZTA = 0x01
     QGL = 0x02
+
+
+class ButtonSource(enum.IntEnum):
+    NONE = 0
+    TOUCH = 1
+    GPIO = 2
+    EVENT = 3
+
+
+class ButtonSlot(enum.IntEnum):
+    NONE = 0
+    NW = 1
+    NE = 2
+    C = 3
+    SW = 4
+    SE = 5
+
+
+class ButtonResolver(enum.IntEnum):
+    NONE = 0
+    PAGE = 1
+    GCODE_MACRO = 2
+    OBSERVE = 3
+    INTERNAL = 4
+
+
+class ButtonProfile(enum.IntEnum):
+    NONE = 0
+    FEED = 1
+    RETRACT = 2
+
+
+@dataclasses.dataclass(frozen=True)
+class ButtonBinding:
+    """One named input; macro strings deliberately remain on the host."""
+
+    name: str
+    source: ButtonSource
+    slot: ButtonSlot
+    resolver: ButtonResolver
+    pin: int = 0xFF
+    argument: int = 0
+    legend: bytes = b""
+    macro: str = None
+    press_macro: str = None
+    release_macro: str = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -607,6 +971,9 @@ class DeviceConfig:
 
     #: Readout ids in order, from _READOUTS.
     readouts: tuple = ()
+
+    #: Compact records; names and macro strings remain in button_bindings.
+    buttons: tuple = ()
 
     gcodes: bytes = b""
 
@@ -687,6 +1054,11 @@ class KnomiCluster:
             "KNOMI_TOOL",
             self.cmd_KNOMI_TOOL,
             desc=self.cmd_KNOMI_TOOL_help,
+        )
+        self.gcode.register_command(
+            "KNOMI_BUTTON",
+            self.cmd_KNOMI_BUTTON,
+            desc=self.cmd_KNOMI_BUTTON_help,
         )
 
         # Before any section's own connect handler, which is what makes the
@@ -1259,6 +1631,47 @@ class KnomiCluster:
             if filament_type is not None:
                 state.type = filament_type
 
+    cmd_KNOMI_BUTTON_help = (
+        "Forward a named button edge to a screen. KNOMI_BUTTON "
+        "[SCREEN=name | TOOL=0] BUTTON=name PRESSED=0|1"
+    )
+
+    def cmd_KNOMI_BUTTON(self, gcmd):
+        screens = self.resolve(gcmd)
+        name = gcmd.get("BUTTON").strip().lower()
+        if not name:
+            raise gcmd.error("KNOMI_BUTTON: BUTTON must name a configured button")
+        pressed = gcmd.get("PRESSED").strip()
+        if pressed not in ("0", "1"):
+            raise gcmd.error("KNOMI_BUTTON: PRESSED must be 0 or 1")
+
+        # Resolve every addressed screen before touching a serial port. A TOOL
+        # may name several screens whose binding tables have different indexes.
+        by_screen = {device.screen_name: device for device in self.devices}
+        targets = []
+        for screen in screens:
+            device = by_screen[screen]
+            match = next(
+                ((index, binding) for index, binding in
+                 enumerate(device.button_bindings) if binding.name == name),
+                None,
+            )
+            if match is None:
+                raise gcmd.error(
+                    f"KNOMI_BUTTON: {screen} has no button named '{name}'"
+                )
+            index, binding = match
+            if binding.source is not ButtonSource.EVENT:
+                raise gcmd.error(
+                    f"KNOMI_BUTTON: {screen} button '{name}' requires "
+                    "source=event"
+                )
+            targets.append((device, index))
+
+        for device, index in targets:
+            device._write(encode_button_event(
+                device.config_crc, index, pressed == "1"))
+
     def get_status(self, eventtime):
         # `devices` is the whole row in one place, so a firmware updater can ask
         # one object what is out there instead of parsing printer.cfg for
@@ -1512,6 +1925,13 @@ class Knomi_Serial:
             return mask
 
         values["key_mask"] = _take(_HAS_KEY_MASK, "hardware_keys", _keys)
+        self.button_bindings = _parse_buttons(
+            config,
+            self.name,
+            values["key_mask"] or 0,
+        )
+        if self.button_bindings:
+            present |= _HAS_BUTTONS
 
         def _pages(raw):
             # Order is the order on screen, and the display lands on the first,
@@ -1534,6 +1954,20 @@ class Knomi_Serial:
             return tuple(order)
 
         pages = _take(_HAS_PAGE_ORDER, "pages", _pages)
+        shared_slots = {
+            binding.slot for binding in self.button_bindings
+            if binding.slot is not ButtonSlot.NONE
+            and binding.resolver is not ButtonResolver.PAGE
+        }
+        if len(shared_slots) == 5 and (pages is None or _PAGES["home"] in pages):
+            last = next(binding for binding in self.button_bindings
+                        if binding.slot is ButtonSlot.C)
+            _button_error(
+                config, self.name, f"button_{last.name}", "slot",
+                last.slot.name,
+                "leaves no room for every Home action when all five slots "
+                "are shared; remove one shared slot or omit home from pages",
+            )
 
         def _estop_at(raw):
             side = str(raw).strip().lower()
@@ -1591,6 +2025,7 @@ class Knomi_Serial:
             # every other unset field collapses to.
             pages=pages or (),
             readouts=readouts or (),
+            buttons=self.button_bindings,
             **{key: (0 if value is None else value) for key, value in values.items()},
         )
 
@@ -1949,6 +2384,9 @@ class Knomi_Serial:
             if cmd == _CMD_RESTART:
                 self.gcode.request_restart("firmware_restart")
                 return
+            if cmd.startswith(_CMD_BUTTON):
+                self._process_button_cmd(cmd[len(_CMD_BUTTON) :])
+                return
             if cmd.startswith(_CMD_GCODE):
                 gcode = cmd[len(_CMD_GCODE) :]
                 self.gcode.run_script(gcode.decode("utf-8"))
@@ -1968,6 +2406,28 @@ class Knomi_Serial:
                 self.toolhead.manual_move(pos, self.config_speed[axis])
         except Exception as e:
             logging.warning(f"{self.name}: Command error: {e}")
+
+    def _process_button_cmd(self, payload):
+        parts = payload.split(b":")
+        if len(parts) != 3:
+            return
+        crc_hex, index_text, edge = parts
+        if (len(crc_hex) != 8 or
+                any(chr(byte).lower() not in _HEX_DIGITS for byte in crc_hex)):
+            return
+        if int(crc_hex, 16) != self.config_crc:
+            return
+        if not index_text or any(byte < 48 or byte > 57 for byte in index_text):
+            return
+        index = int(index_text)
+        if index >= len(self.button_bindings) or edge not in (b"P", b"R"):
+            return
+        binding = self.button_bindings[index]
+        if binding.resolver is not ButtonResolver.GCODE_MACRO:
+            return
+        macro = binding.press_macro if edge == b"P" else binding.release_macro
+        if macro is not None:
+            self.gcode.run_script(macro)
 
 
 def load_config(config):

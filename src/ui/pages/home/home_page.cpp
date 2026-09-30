@@ -1,167 +1,213 @@
 #include "home_page.h"
 
-#include "ui/pages/page_helper.h"
+#include <stdint.h>
+
+#include "board_conf.h"
+#include "input/button_input.h"
+#include "printer/config.h"
 #include "printer/send/send_cmd.h"
+#include "ui/action_control.h"
+#include "ui/theme.h"
 #include "user_conf.h"
+
+static_assert(HOME_TARGET_SIZE <= HOME_CORNER_OFFSET,
+              "Home centre and diagonal hit targets must not overlap");
+static_assert(
+    2 * HOME_CORNER_OFFSET * HOME_CORNER_OFFSET <=
+        (RES_H / 2 - (HOME_MARK_SIZE + 2 * HOME_RING_GAP) / 2 - 1) *
+            (RES_H / 2 - (HOME_MARK_SIZE + 2 * HOME_RING_GAP) / 2 - 1),
+    "Home corner rings must fit within the round display");
 
 namespace ui {
 namespace home_page {
 
-static const char *kZTA = "ZTA";
-static const char *kQGL = "QGL";
+namespace {
 
-lv_obj_t *_all = nullptr;
-lv_obj_t *_tram = nullptr;
-lv_obj_t *_x = nullptr;
-lv_obj_t *_y = nullptr;
-lv_obj_t *_z = nullptr;
+enum ActionId : uint8_t { kX, kY, kAll, kTram, kZ, kActionCount };
+
+const printer::ButtonSlot kSlots[kActionCount] = {
+    printer::ButtonSlot::kNW, printer::ButtonSlot::kNE,
+    printer::ButtonSlot::kC, printer::ButtonSlot::kSW,
+    printer::ButtonSlot::kSE,
+};
+
+action_control::Control _controls[kActionCount] = {};
+lv_obj_t *_page = nullptr;
 printer::TramType _tram_type = printer::TramType::kNone;
+bool _busy = false;
+int8_t _shown_busy = -1;
+int8_t _shown_homed[4] = {-1, -1, -1, -1};
+bool _inner_used[4] = {};
 
-//: Last values written. Setting a local style property invalidates the object
-//: whether or not the value changed, and this page was restating four button
-//: colours - eight style writes, since the ink follows the fill - on every
-//: packet, to say the axes were still homed exactly as they had been.
-//:
-//: It cost almost nothing while the page was off-screen, because LVGL discards
-//: an invalidation outside the clip area. It cost the full four buttons the
-//: moment you swiped to it, which is the only time anyone would notice.
-//:
-//: Impossible sentinels, so the first update after a rebuild always writes.
-int8_t _shown_x = -1;
-int8_t _shown_y = -1;
-int8_t _shown_z = -1;
+uint8_t _legacy_bit(printer::ButtonSlot slot) {
+  switch (slot) {
+  case printer::ButtonSlot::kNW: return printer::kKeyNW;
+  case printer::ButtonSlot::kNE: return printer::kKeyNE;
+  case printer::ButtonSlot::kSW: return printer::kKeySW;
+  case printer::ButtonSlot::kSE: return printer::kKeySE;
+  case printer::ButtonSlot::kC:
+  case printer::ButtonSlot::kNone:
+    return 0;
+  }
+  return 0;
+}
 
-void _all_click_handler(lv_event_t *e);
-void _tram_click_handler(lv_event_t *e);
-void _x_click_handler(lv_event_t *e);
-void _y_click_handler(lv_event_t *e);
-void _z_click_handler(lv_event_t *e);
+void _action(input::button::Phase phase, void *context) {
+  if (phase != input::button::Phase::kRelease || _busy) {
+    return;
+  }
+  ActionId id = (ActionId)(uintptr_t)context;
+  switch (id) {
+  case kX: printer::send::send_gcode("G28 X"); break;
+  case kY: printer::send::send_gcode("G28 Y"); break;
+  case kAll: printer::send::send_gcode("G28"); break;
+  case kZ: printer::send::send_gcode("G28 Z"); break;
+  case kTram:
+    if (_tram_type == printer::TramType::kQGL) {
+      printer::send::send_gcode("QUAD_GANTRY_LEVEL");
+    } else if (_tram_type == printer::TramType::kZTA) {
+      printer::send::send_gcode("Z_TILT_ADJUST");
+    }
+    break;
+  case kActionCount:
+    break;
+  }
+}
+
+void _page_deleted(lv_event_t *event) {
+  if (lv_event_get_target(event) != _page) {
+    return;
+  }
+  _page = nullptr;
+  for (action_control::Control &control : _controls) {
+    control = {};
+  }
+}
+
+// Shared corner bindings keep their physical legend on the bezel. The Home
+// action they displaced moves to a distinct touch-only position on the inner
+// cardinal orbit, clear of the centre and the fixed corner overlay.
+void _inner_position(ActionId id, int32_t *x, int32_t *y) {
+  // left, top, bottom, right. Keep the fallback near its physical slot when
+  // several are displaced, with the centre's primary action taking top first.
+  const uint8_t preferred[kActionCount][4] = {
+      {0, 1, 2, 3}, {1, 3, 2, 0}, {1, 2, 0, 3},
+      {2, 0, 3, 1}, {3, 2, 1, 0},
+  };
+  uint8_t position = preferred[id][0];
+  for (uint8_t attempt = 0; attempt < 4; attempt++) {
+    uint8_t candidate = preferred[id][attempt];
+    if (!_inner_used[candidate]) {
+      position = candidate;
+      _inner_used[position] = true;
+      break;
+    }
+  }
+  const int32_t at = HOME_INNER_OFFSET;
+  const int32_t coords[4][2] = {{-at, 0}, {0, -at}, {0, at}, {at, 0}};
+  *x = coords[position][0];
+  *y = coords[position][1];
+}
+
+void _create_action(
+    lv_obj_t *page, ActionId id, const char *symbol, bool available) {
+  if (!available) {
+    return;
+  }
+  printer::ButtonSlot slot = kSlots[id];
+  bool shared = input::button::slot_claimed(slot);
+  int32_t x = 0, y = 0;
+  int32_t target_size = HOME_TARGET_SIZE;
+  int32_t mark_size = id == kAll ? HOME_CENTRE_MARK_SIZE : HOME_MARK_SIZE;
+  const lv_font_t *font = id == kAll ? &lv_font_montserrat_24 : &lv_font_montserrat_16;
+  printer::ButtonSlot route = slot;
+
+  if (shared) {
+    _inner_position(id, &x, &y);
+    target_size = HOME_INNER_TARGET_SIZE;
+    mark_size = HOME_INNER_MARK_SIZE;
+    font = &lv_font_montserrat_16;
+    route = printer::ButtonSlot::kNone;
+  } else {
+    switch (slot) {
+    case printer::ButtonSlot::kNW: x = -HOME_CORNER_OFFSET; y = -HOME_CORNER_OFFSET; break;
+    case printer::ButtonSlot::kNE: x = HOME_CORNER_OFFSET; y = -HOME_CORNER_OFFSET; break;
+    case printer::ButtonSlot::kSW: x = -HOME_CORNER_OFFSET; y = HOME_CORNER_OFFSET; break;
+    case printer::ButtonSlot::kSE: x = HOME_CORNER_OFFSET; y = HOME_CORNER_OFFSET; break;
+    case printer::ButtonSlot::kC:
+    case printer::ButtonSlot::kNone:
+      break;
+    }
+    input::button::register_page_action(
+        page, slot, _action, (void *)(uintptr_t)id);
+  }
+
+  bool touch = shared ||
+      (input::button::slot_touch_enabled(slot) &&
+       !(printer::config::get().key_mask & _legacy_bit(slot)));
+  _controls[id] = action_control::create(
+      page, x, y, target_size, mark_size, symbol, font, theme::machine(),
+      touch, route, _action, (void *)(uintptr_t)id);
+}
+
+}
 
 lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
-  lv_obj_t *page = page_helper::create_page(parent, "HOME");
-
-  // These are not part of the page and outlive it, so a rebuilt page would
-  // otherwise be told it is already showing what the last one showed.
-  _shown_x = -1;
-  _shown_y = -1;
-  _shown_z = -1;
-
-  int all_x, all_width;
-  const char *tram_label;
-  switch (state.tram_type) {
-  case printer::TramType::kZTA:
-    all_x = -41;
-    all_width = 76;
-    tram_label = kZTA;
-    break;
-  case printer::TramType::kQGL:
-    all_x = -41;
-    all_width = 76;
-    tram_label = kQGL;
-    break;
-  default:
-    all_x = 0;
-    all_width = 160;
-    tram_label = nullptr;
-    break;
-  }
+  lv_obj_t *page = lv_obj_create(parent);
+  lv_obj_remove_style_all(page);
+  lv_obj_set_size(page, RES_H, RES_V);
+  lv_obj_add_event_cb(page, _page_deleted, LV_EVENT_DELETE, nullptr);
+  _page = page;
   _tram_type = state.tram_type;
-
-  _all = page_helper::create_center_button(
-      page,
-      all_x, -38,
-      all_width, 60,
-      "ALL",
-      _all_click_handler
-  );
-  if (tram_label) {
-    _tram = page_helper::create_center_button(
-        page,
-        41, -38,
-        76, 60,
-        tram_label,
-        _tram_click_handler
-    );
+  _shown_busy = -1;
+  for (int8_t &shown : _shown_homed) {
+    shown = -1;
   }
-  _x = page_helper::create_center_button(
-      page,
-      -55, 28,
-      50, 60,
-      "X",
-      _x_click_handler
-  );
-  _y = page_helper::create_center_button(
-      page,
-      0, 28,
-      50, 60,
-      "Y",
-      _y_click_handler
-  );
-  _z = page_helper::create_center_button(
-      page,
-      55, 28,
-      50, 60,
-      "Z",
-      _z_click_handler
-  );
+  for (bool &used : _inner_used) {
+    used = false;
+  }
+  for (action_control::Control &control : _controls) {
+    control = {};
+  }
 
+  // The centre is both the page identity and its primary action. Construct it
+  // first so a shared centre binding claims an inner position before corners.
+  _create_action(page, kAll, LV_SYMBOL_HOME, true);
+  _create_action(page, kX, "X", true);
+  _create_action(page, kY, "Y", true);
+  _create_action(page, kTram,
+                 _tram_type == printer::TramType::kQGL ? "QGL" : "ZTA",
+                 _tram_type != printer::TramType::kNone);
+  _create_action(page, kZ, "Z", true);
+
+  printer_update(state);
   return page;
 }
 
 void printer_update(const printer::State &state) {
-  lv_obj_set_state(_all, LV_STATE_DISABLED, state.working);
-  if (_tram) {
-    lv_obj_set_state(_tram, LV_STATE_DISABLED, state.working);
+  _busy = state.working;
+  int8_t busy = _busy ? 1 : 0;
+  if (busy != _shown_busy) {
+    _shown_busy = busy;
+    for (const action_control::Control &control : _controls) {
+      if (control.label) {
+        action_control::set_enabled(control, !_busy);
+      }
+    }
   }
-  lv_obj_set_state(_x, LV_STATE_DISABLED, state.working);
-  lv_obj_set_state(_y, LV_STATE_DISABLED, state.working);
-  lv_obj_set_state(_z, LV_STATE_DISABLED, state.working);
 
-  int8_t x = state.homed_x ? 1 : 0;
-  int8_t y = state.homed_y ? 1 : 0;
-  int8_t z = state.homed_z ? 1 : 0;
-  if (x == _shown_x && y == _shown_y && z == _shown_z) {
-    return;
+  const bool homed[4] = {
+      state.homed_x ? 1 : 0, state.homed_y ? 1 : 0,
+      (state.homed_x && state.homed_y && state.homed_z) ? 1 : 0,
+      state.homed_z ? 1 : 0,
+  };
+  const ActionId ids[4] = {kX, kY, kAll, kZ};
+  for (uint8_t i = 0; i < 4; i++) {
+    if (homed[i] != _shown_homed[i]) {
+      _shown_homed[i] = homed[i];
+      action_control::set_ring(_controls[ids[i]], homed[i] != 0);
+    }
   }
-  bool all = _shown_x == 1 && _shown_y == 1 && _shown_z == 1;
-  _shown_x = x;
-  _shown_y = y;
-  _shown_z = z;
-
-  page_helper::set_button_color(_x, x ? COLOR_HOMED_BG : COLOR_BTN_BG);
-  page_helper::set_button_color(_y, y ? COLOR_HOMED_BG : COLOR_BTN_BG);
-  page_helper::set_button_color(_z, z ? COLOR_HOMED_BG : COLOR_BTN_BG);
-  if ((x && y && z) != all) {
-    page_helper::set_button_color(
-        _all, (x && y && z) ? COLOR_HOMED_BG : COLOR_BTN_BG);
-  }
-}
-
-void _all_click_handler(lv_event_t *e) {
-  printer::send::send_gcode("G28");
-}
-
-void _tram_click_handler(lv_event_t *e) {
-  switch (_tram_type) {
-  case printer::TramType::kZTA:
-    printer::send::send_gcode("Z_TILT_ADJUST");
-    break;
-  case printer::TramType::kQGL:
-    printer::send::send_gcode("QUAD_GANTRY_LEVEL");
-    break;
-  default:
-    break;
-  }
-}
-
-void _x_click_handler(lv_event_t *e) {
-  printer::send::send_gcode("G28 X");
-}
-void _y_click_handler(lv_event_t *e) {
-  printer::send::send_gcode("G28 Y");
-}
-void _z_click_handler(lv_event_t *e) {
-  printer::send::send_gcode("G28 Z");
 }
 
 }

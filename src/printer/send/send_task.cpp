@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <string>
 #include <vector>
+#include <stdio.h>
 
 #include "send_cmd.h"
 
@@ -70,6 +71,14 @@ void send_report(const char *fields) {
   std::string cmd = Commands::kReport;
   cmd.append(fields);
   send_cmd(cmd.c_str());
+}
+
+void send_button_event(uint32_t config_crc, uint8_t index, char edge) {
+  char cmd[48];
+  snprintf(
+      cmd, sizeof(cmd), "BUTTON:%08x:%u:%c",
+      (unsigned int)config_crc, (unsigned int)index, edge);
+  send_cmd(cmd);
 }
 
 void send_config_request() {

@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "board_conf.h"
+#include "input/button_input.h"
 #include "printer/send/send_cmd.h"
 #include "ui/corner.h"
 #include "ui/haze.h"
@@ -112,8 +113,8 @@ int32_t _sine(int32_t phase_fx) {
 
 }
 
-static void _pause_handler(lv_event_t *e);
-static void _cancel_handler(lv_event_t *e);
+static void _pause_handler(input::button::Phase phase, void *context);
+static void _cancel_handler(input::button::Phase phase, void *context);
 static void _wave_tick(lv_timer_t *timer);
 static void _page_deleted(lv_event_t *e);
 static void _stop_timers();
@@ -277,7 +278,10 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   return page;
 }
 
-static void _pause_handler(lv_event_t *e) {
+static void _pause_handler(input::button::Phase phase, void *) {
+  if (phase != input::button::Phase::kRelease) {
+    return;
+  }
   printer::send::send_gcode(_paused ? "RESUME" : "PAUSE");
 }
 
@@ -438,7 +442,10 @@ static void _wave_tick(lv_timer_t *timer) {
 // asks twice as well, but for the opposite reason: it stops the machine where
 // it stands to limit damage, and is guarded as lightly as it can stand rather
 // than as heavily as it can bear.
-static void _cancel_handler(lv_event_t *e) {
+static void _cancel_handler(input::button::Phase phase, void *) {
+  if (phase != input::button::Phase::kRelease) {
+    return;
+  }
   if (!_cancel_armed) {
     _cancel_armed = true;
     _show_cancel_state();

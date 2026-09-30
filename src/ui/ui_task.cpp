@@ -7,6 +7,7 @@
 #include "board_conf.h"
 #include "display/display.h"
 #include "display/cst816s.h"
+#include "input/button_input.h"
 #include "printer/config.h"
 #include "printer/identity.h"
 #include "printer/printer.h"
@@ -65,6 +66,8 @@ namespace ui
 
     while (true)
     {
+      input::button::sync_config();
+      input::button::drain();
       uint32_t enter = micros();
       lv_task_handler();
       uint32_t spent = micros() - enter;

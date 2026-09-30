@@ -34,6 +34,9 @@ sides to move together.
 - `_PROTO_VERSION` and `printer::kProtoVersion` describe one wire contract.
   Update both sides, their layout assertions, `docs/protocol.md`, and protocol
   tests whenever that contract changes.
+- Button names and macro strings stay on the Klipper host. Device button indexes
+  are valid only with the matching configuration CRC; never act on an index
+  from an older config or trust device-supplied macro text.
 - Shared printer state is computed once by `KnomiCluster`. Avoid adding
   per-display copies of work that is identical across the row.
 - Invalid `printer.cfg` values should fail at configuration/startup with a

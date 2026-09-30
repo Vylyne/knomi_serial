@@ -37,6 +37,7 @@ const uint32_t kRequestPeriodMs = 1000;
 // the buffer it is reading is the one that is not being written.
 Config _slot[2];
 volatile uint8_t _live = 0;
+portMUX_TYPE _snapshot_mux = portMUX_INITIALIZER_UNLOCKED;
 
 uint32_t _held_crc = 0;
 uint32_t _asked_at = 0;
@@ -52,6 +53,7 @@ void _defaults(Config *c) {
   c->dim_brightness = SLEEP_DIM_BRIGHTNESS;
   c->key_mask = CORNER_LEGEND_KEYS;
   c->estop_at = (uint8_t)ESTOP_AT;
+  memset(c->buttons, 0, sizeof(c->buttons));
 
   const Readout readouts[] = DEFAULT_READOUTS;
   memset(c->readouts, 0, sizeof(c->readouts));
@@ -74,6 +76,94 @@ void _defaults(Config *c) {
 }
 
 bool _initialised = false;
+
+bool _button_pin_allowed(uint8_t pin) {
+  switch (pin) {
+  case 5: case 6: case 8: case 9: case 11: case 15:
+  case 38: case 39: case 40: case 41: case 42: case 47: case 48:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool _button_legend_valid(const ButtonConfig &b, bool required) {
+  bool ended = false;
+  bool have_char = false;
+  for (char character : b.legend) {
+    uint8_t c = (uint8_t)character;
+    if (c == 0) {
+      ended = true;
+    } else {
+      if (ended || c < 0x20 || c > 0x7e) return false;
+      have_char = true;
+    }
+  }
+  return required ? have_char : !have_char;
+}
+
+bool _buttons_valid(const ButtonConfig *buttons) {
+  uint64_t used_pins = 0;
+  uint8_t used_slots = 0;
+  bool terminated = false;
+  for (unsigned int i = 0; i < kMaxButtons; i++) {
+    const ButtonConfig &b = buttons[i];
+    if (b.source == ButtonSource::kNone) {
+      terminated = true;
+      const uint8_t *bytes = reinterpret_cast<const uint8_t *>(&b);
+      for (unsigned int j = 0; j < sizeof(b); j++) {
+        if (bytes[j] != 0) return false;
+      }
+      continue;
+    }
+    if (terminated || (uint8_t)b.source > (uint8_t)ButtonSource::kEvent ||
+        (uint8_t)b.slot > (uint8_t)ButtonSlot::kSE ||
+        b.reserved[0] || b.reserved[1]) {
+      return false;
+    }
+    if (b.slot != ButtonSlot::kNone) {
+      uint8_t bit = 1u << (uint8_t)b.slot;
+      if (used_slots & bit) return false;
+      used_slots |= bit;
+    } else if (b.source == ButtonSource::kTouch) {
+      return false;
+    }
+    if (b.source == ButtonSource::kGpio) {
+      if (!_button_pin_allowed(b.pin) || (used_pins & (1ull << b.pin))) {
+        return false;
+      }
+      used_pins |= 1ull << b.pin;
+    } else if (b.pin != 0xff) {
+      return false;
+    }
+    switch (b.resolver) {
+    case ButtonResolver::kPage:
+      if (b.slot == ButtonSlot::kNone || b.flags || b.argument ||
+          !_button_legend_valid(b, false)) return false;
+      break;
+    case ButtonResolver::kObserve:
+      if (b.source == ButtonSource::kTouch ||
+          b.flags || !_button_legend_valid(b, false) ||
+          (b.argument != (uint8_t)ButtonProfile::kFeed &&
+           b.argument != (uint8_t)ButtonProfile::kRetract)) {
+        return false;
+      }
+      break;
+    case ButtonResolver::kGcodeMacro:
+      if (!(b.flags & (kButtonBare | kButtonPress | kButtonRelease)) ||
+          (b.flags & ~(kButtonBare | kButtonPress | kButtonRelease)) ||
+          ((b.flags & kButtonBare) &&
+           (b.flags & (kButtonPress | kButtonRelease))) || b.argument ||
+          !_button_legend_valid(b, b.slot != ButtonSlot::kNone)) {
+        return false;
+      }
+      break;
+    default:
+      return false;
+    }
+  }
+  return true;
+}
 
 void _ensure() {
   if (_initialised) {
@@ -117,8 +207,18 @@ const Config &get() {
   return _slot[_live];
 }
 
+void snapshot(Config *out, uint32_t *crc) {
+  _ensure();
+  portENTER_CRITICAL(&_snapshot_mux);
+  if (out) memcpy(out, &_slot[_live], sizeof(*out));
+  if (crc) *crc = _held_crc;
+  portEXIT_CRITICAL(&_snapshot_mux);
+}
+
 uint32_t held_crc() {
-  return _held_crc;
+  uint32_t crc;
+  snapshot(nullptr, &crc);
+  return crc;
 }
 
 bool apply(const void *payload, uint32_t len) {
@@ -130,9 +230,16 @@ bool apply(const void *payload, uint32_t len) {
   Config wire;
   memcpy(&wire, payload, kConfigWireSize);
   wire.present = ntohl(wire.present);
+  if ((wire.present & kHasButtons) && !_buttons_valid(wire.buttons)) {
+    return false;
+  }
+
+  // Hash the received bytes before taking the short publication lock.
+  uint32_t crc = crc32(payload, len);
 
   // Start from the defaults and overlay only what the host set, so a setting
   // absent from printer.cfg keeps whatever this firmware was built with.
+  portENTER_CRITICAL(&_snapshot_mux);
   uint8_t next = _live ^ 1;
   Config *c = &_slot[next];
   _defaults(c);
@@ -168,6 +275,9 @@ bool apply(const void *payload, uint32_t len) {
   if (wire.present & kHasReadouts) {
     memcpy(c->readouts, wire.readouts, sizeof(c->readouts));
   }
+  if (wire.present & kHasButtons) {
+    memcpy(c->buttons, wire.buttons, sizeof(c->buttons));
+  }
   if (wire.present & kHasGcodes) {
     memcpy(c->gcodes, wire.gcodes, sizeof(c->gcodes));
     // A fixed-width field the host zero-pads, but a frame that arrived short
@@ -178,12 +288,12 @@ bool apply(const void *payload, uint32_t len) {
   // Over the bytes as received, before any of the swapping above. That is what
   // the host hashed, and hashing our own decoded copy would agree with the host
   // only by accident of endianness.
-  uint32_t crc = crc32(payload, len);
   bool changed = crc != _held_crc;
   _held_crc = crc;
 
   _live = next;
   _ever_asked = false;
+  portEXIT_CRITICAL(&_snapshot_mux);
 
   // Only on a change, and never during begin() - which reached here holding the
   // very bytes it just read back out of flash.

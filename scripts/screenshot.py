@@ -12,9 +12,14 @@ Nothing else may be driving the port at the time - stop Klipper, or use
 
     python scripts/screenshot.py COM5 --drive printing -o docs/img/printing.png
 
---all regenerates every image the README uses, including the lost-link one that
-needs the script to stop talking and wait out the device's watchdog. Run it
-after any visual change:
+Select one idle page as the landing page for focused UI work:
+
+    python scripts/screenshot.py COM5 --drive idle --page home -o home.png
+    python scripts/screenshot.py COM5 --drive idle --page move --slotless-buttons -o move.png
+    python scripts/screenshot.py COM5 --drive idle --page move --shared-buttons -o move-shared.png
+
+--all regenerates the status images, including the lost-link one that needs
+the script to stop talking and wait out the device's watchdog:
 
     python scripts/screenshot.py COM5 --all
 
@@ -63,12 +68,17 @@ MESSAGES = {
 }
 
 
-def state_for(preset, config_crc, color=0x9572BF, ftype=b"ABS"):
+def state_for(preset, config_crc, color=0x9572BF, ftype=b"ABS", tram="none"):
     # Deliberately not the machine's own pink. The two colours mean different
     # things - one is the printer, one is what is loaded in it - and a
     # documentation shot that uses the same value for both cannot show that.
     base = dict(
         status=k.PrinterStatus.IDLE,
+        tram_type={
+            "none": k.PrinterTramType.NONE,
+            "qgl": k.PrinterTramType.QGL,
+            "zta": k.PrinterTramType.ZTA,
+        }[tram],
         homed_x=True, homed_y=True, homed_z=True,
         used=True, active=True, tool_number=0,
         hotend_temp=243, hotend_target=245,
@@ -196,7 +206,8 @@ def shoot(port, out, preset, config, config_crc, args, quiet_first=False):
             color = int(args.color.strip().lstrip("#"), 16)
         except ValueError:
             sys.exit(f"  --color '{args.color}' is not hex")
-        frame = state_for(preset, config_crc, color, args.type.encode("utf-8")[:15])
+        frame = state_for(
+            preset, config_crc, color, args.type.encode("utf-8")[:15], args.tram)
         if verbose:
             print(f"  {os.path.basename(out):<16} driving '{preset}'")
 
@@ -253,6 +264,41 @@ DOC_SHOTS = [
 ]
 
 
+def build_config(page=None, shared_buttons=False, slotless_buttons=False):
+    """The deterministic config used while driving documentation states."""
+    if shared_buttons and slotless_buttons:
+        raise ValueError("shared and slotless button demos are exclusive")
+    present = k._HAS_COLOR_MACHINE | k._HAS_GCODES
+    pages = ()
+    buttons = ()
+    if page is not None:
+        present |= k._HAS_PAGE_ORDER
+        pages = (k._PAGES[page],)
+    if shared_buttons or slotless_buttons:
+        present |= k._HAS_BUTTONS
+        feed_slot = k.ButtonSlot.NE if shared_buttons else k.ButtonSlot.NONE
+        retract_slot = k.ButtonSlot.SE if shared_buttons else k.ButtonSlot.NONE
+        buttons = (
+            k.ButtonBinding(
+                name="feed", source=k.ButtonSource.EVENT,
+                slot=feed_slot, resolver=k.ButtonResolver.OBSERVE,
+                argument=k.ButtonProfile.FEED.value,
+            ),
+            k.ButtonBinding(
+                name="retract", source=k.ButtonSource.EVENT,
+                slot=retract_slot, resolver=k.ButtonResolver.OBSERVE,
+                argument=k.ButtonProfile.RETRACT.value,
+            ),
+        )
+    return k.DeviceConfig(
+        present=present,
+        color_machine=0xFFA7C4,
+        pages=pages,
+        buttons=buttons,
+        gcodes=b"HOME\nQGL\nPURGE\nCLEAN_NOZZLE",
+    )
+
+
 def main():
     p = argparse.ArgumentParser(
         description="Capture a Knomi_Serial display over the serial link.")
@@ -268,6 +314,16 @@ def main():
     p.add_argument("--drive", choices=sorted(PRESETS),
                    help="feed the display this state first, instead of "
                         "photographing whatever a running Klipper is showing")
+    p.add_argument("--page", choices=sorted(k._PAGES),
+                   help="make this the only configured idle page, and thus "
+                   "the landing page")
+    button_demo = p.add_mutually_exclusive_group()
+    button_demo.add_argument("--shared-buttons", action="store_true",
+                             help="show demo FEED/RETRACT observers at NE/SE")
+    button_demo.add_argument("--slotless-buttons", action="store_true",
+                             help="configure demo FEED/RETRACT observers with no visible slots")
+    p.add_argument("--tram", choices=("none", "qgl", "zta"), default="none",
+                   help="show QGL or ZTA on the Home page while driving state")
     p.add_argument("--color", "--colour", dest="color", default="9572BF",
                    help="filament colour for --drive, RRGGBB (default 9572BF, "
                         "chosen to differ from the machine accent)")
@@ -282,10 +338,9 @@ def main():
     # The accent is set explicitly rather than left to the firmware default,
     # because the device now remembers the last config it was given - so a shot
     # taken after somebody's experiment would quietly inherit their colour.
-    config = k.DeviceConfig(
-        present=k._HAS_COLOR_MACHINE | k._HAS_GCODES,
-        color_machine=0xFFA7C4,
-        gcodes=b"HOME\nQGL\nPURGE\nCLEAN_NOZZLE")
+    config = build_config(
+        args.page, shared_buttons=args.shared_buttons,
+        slotless_buttons=args.slotless_buttons)
     config_crc = zlib.crc32(k.config_payload(config))
 
     try:

@@ -1,6 +1,8 @@
 #ifndef SEND_CMD_H
 #define SEND_CMD_H
 
+#include <stdint.h>
+
 namespace printer {
 namespace send {
 
@@ -20,6 +22,7 @@ void send_stop();
 void send_gcode(const char *gcode);
 void send_move(const char *dir);
 void send_report(const char *fields);
+void send_button_event(uint32_t config_crc, uint8_t index, char edge);
 
 //: Ask the host to send config, because the CRC it stamps on every state frame
 //: stops matching the config we hold. Rate limited by printer::config.

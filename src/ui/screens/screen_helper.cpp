@@ -1,6 +1,7 @@
 #include "screen_helper.h"
 
 #include "board_conf.h"
+#include "input/button_input.h"
 #include "printer/config.h"
 #include "ui/ui.h"
 #include "user_conf.h"
@@ -15,6 +16,8 @@ namespace {
 //: tag_pages, but those are children of the row rather than of the screen, so
 //: the two namespaces cannot collide.
 const intptr_t kRowTag = -1;
+const intptr_t kOverlayTag = -2;
+lv_obj_t *_overlay_exclusion = nullptr;
 
 lv_obj_t *_child_tagged(lv_obj_t *parent, intptr_t tag) {
   if (!parent) {
@@ -31,6 +34,7 @@ lv_obj_t *_child_tagged(lv_obj_t *parent, intptr_t tag) {
 }
 
 void _scroll_end(lv_event_t *e) {
+  (void)e;
   // Only the page in view and its neighbours are kept current, and only when
   // the state changes - so a page arriving after two swipes on a still printer
   // was never a neighbour and has heard nothing. Hand it the last state.
@@ -41,14 +45,29 @@ void _scroll_end(lv_event_t *e) {
   refresh();
 }
 
+void _scroll(lv_event_t *e) {
+  lv_obj_t *target = static_cast<lv_obj_t *>(lv_event_get_target(e));
+  lv_obj_t *scr = lv_obj_get_screen(target);
+  update_overlay(scr);
+}
+
 }
 
 void tag_pages(lv_obj_t *scr) {
   if (!scr) {
     return;
   }
+  lv_obj_t *overlay = _child_tagged(scr, kOverlayTag);
+  if (overlay) {
+    // The overlay is a floating row child so a drag on a shared touch button
+    // can still reach the row's horizontal scroll. Keep it above page marks.
+    lv_obj_move_foreground(overlay);
+  }
   uint32_t count = lv_obj_get_child_count(scr);
   for (uint32_t i = 0; i < count; i++) {
+    if (lv_obj_get_child(scr, i) == overlay) {
+      continue;
+    }
     // Offset by one so that zero keeps meaning "never stamped".
     lv_obj_set_user_data(lv_obj_get_child(scr, i), (void *)(intptr_t)(i + 1));
   }
@@ -105,6 +124,7 @@ void update_visible(
 }
 
 lv_obj_t *create_screen() {
+  _overlay_exclusion = nullptr;
   // Two axes. The screen scrolls vertically between exactly two things - the
   // row of pages, and whatever is pulled down to - while the row inside it
   // scrolls horizontally between the pages themselves.
@@ -137,6 +157,8 @@ lv_obj_t *create_screen() {
 
   lv_obj_add_event_cb(row, _scroll_end, LV_EVENT_SCROLL_END, nullptr);
   lv_obj_add_event_cb(scr, _scroll_end, LV_EVENT_SCROLL_END, nullptr);
+  lv_obj_add_event_cb(row, _scroll, LV_EVENT_SCROLL, nullptr);
+  lv_obj_add_event_cb(scr, _scroll, LV_EVENT_SCROLL, nullptr);
   lv_obj_set_user_data(row, (void *)kRowTag);
 
   // Both children exist before anyone asks about either, which is the whole
@@ -153,11 +175,53 @@ lv_obj_t *create_screen() {
     lv_obj_move_to_index(slot, 0);
   }
 
+  // Fixed to the glass rather than parented to a horizontally scrolling page:
+  // shared bindings label the physical key position on every page.
+  lv_obj_t *overlay = lv_obj_create(row);
+  lv_obj_remove_style_all(overlay);
+  lv_obj_set_size(overlay, RES_H, RES_V);
+  lv_obj_remove_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_remove_flag(overlay, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(overlay, LV_OBJ_FLAG_FLOATING);
+  lv_obj_set_user_data(overlay, (void *)kOverlayTag);
+  input::button::build_overlay(overlay);
+
   // Park on the row whichever side the stop ended up, so a screen never opens
   // already showing it.
   lv_obj_update_layout(scr);
   lv_obj_scroll_to_y(scr, lv_obj_get_y(row), LV_ANIM_OFF);
   return scr;
+}
+
+void register_overlay_exclusion(lv_obj_t *page) {
+  _overlay_exclusion = page;
+}
+
+void update_overlay(lv_obj_t *scr) {
+  lv_obj_t *row = page_row(scr);
+  lv_obj_t *overlay = _child_tagged(row, kOverlayTag);
+  if (!overlay || !row) {
+    return;
+  }
+  lv_area_t screen_area, row_area;
+  lv_obj_get_coords(scr, &screen_area);
+  lv_obj_get_coords(row, &row_area);
+  bool on_row = row_area.y1 <= screen_area.y1 &&
+      row_area.y2 >= screen_area.y2;
+  bool excluded = false;
+  if (on_row && _overlay_exclusion) {
+    lv_area_t page_area;
+    lv_obj_get_coords(_overlay_exclusion, &page_area);
+    int32_t middle = (screen_area.x1 + screen_area.x2) / 2;
+    excluded = page_area.x1 <= middle && page_area.x2 >= middle;
+  }
+  input::button::set_overlay_touch_compact(excluded);
+  input::button::set_overlay_touch_enabled(on_row);
+  if (on_row) {
+    lv_obj_remove_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+  }
 }
 
 lv_obj_t *page_row(lv_obj_t *scr) {
@@ -173,7 +237,8 @@ lv_obj_t *estop_slot(lv_obj_t *scr) {
   uint32_t count = lv_obj_get_child_count(scr);
   for (uint32_t i = 0; i < count; i++) {
     lv_obj_t *child = lv_obj_get_child(scr, i);
-    if ((intptr_t)lv_obj_get_user_data(child) != kRowTag) {
+    intptr_t tag = (intptr_t)lv_obj_get_user_data(child);
+    if (tag != kRowTag && tag != kOverlayTag) {
       return child;
     }
   }

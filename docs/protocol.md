@@ -27,6 +27,7 @@ at a time, so any amount of noise between frames is recovered from.
 | 0x02 | `CONFIG`  | when the device asks                        |
 | 0x03 | `MESSAGE` | when there is something to tell the operator |
 | 0x04 | `SNAPSHOT` | when a human asks for a screenshot |
+| 0x05 | `BUTTON_EVENT` | when Klipper forwards a named button edge |
 
 A device that does not recognise a type skips it using `LEN` and stays in sync.
 That is the reason the length is on the wire at all: it lets the two ends
@@ -96,7 +97,7 @@ print time, which is what the stepper is actually being told. The host multiplie
 by 1000 and sends µm/s. Only the mounted tool gets a non-zero value; a docked
 tool shares the toolhead's motion report and none of its filament.
 
-## `CONFIG` — 292 bytes
+## `CONFIG` — 388 bytes
 
 Everything that is true for hours at a time: the macro list, colours, the sleep
 timings, and which corners are soft keys.
@@ -112,7 +113,21 @@ timings, and which corners are soft keys.
 | `uint8`    | `estop_at` — 0 below the page row, 1 above it |
 | `uint8[4]` | `readouts` — secondary readout ids in order, terminated by 0 |
 | `uint8[8]` | `page_order` — page ids in order, terminated by 0 |
+| `ButtonConfig[8]` | fixed button records, 12 bytes each; zero-filled after the last binding |
 | `char[256]`| `gcodes`, newline-separated |
+
+Each button record is `source:uint8`, `slot:uint8`, `resolver:uint8`,
+`flags:uint8`, `pin:uint8`, `argument:uint8`, `legend:char[4]`, then two
+reserved zero bytes. Source is 1 touch, 2 GPIO, or 3 host event. Slot is 0
+none, 1 NW, 2 NE, 3 centre, 4 SW, or 5 SE. Resolver is 1 page, 2 G-code
+macro, or 3 observe; 4 is reserved for internal actions and is currently
+rejected in `printer.cfg`. Flags bit 0 marks a bare release macro, bit 1 a
+press macro, and bit 2 a release macro. `argument` names the observe profile:
+1 FEED or 2 RETRACT. Pin is `0xff` for a source other than GPIO. Names and
+macro strings remain on the host; record indexes are meaningful only with the
+CRC of this payload. An observed GPIO or host-event button may use slot 0: it
+continues tracking its input but draws no mark and reserves no page position.
+Page-resolved and touch buttons require a visible slot.
 
 `page_order` is why there is one firmware rather than two. A build flag used to
 compile the home and move pages out, which saved 1572 bytes of a 4.7 MB flash
@@ -183,6 +198,7 @@ an option actually written in `printer.cfg`.
     page_order              bit 8
     estop_at                bit 9
     readouts                bit 10
+    buttons                 bit 11
 
 ### How it stays in sync
 
@@ -214,6 +230,15 @@ Both sides expose it: the device reports `cfg=` in its status line, and the
 module surfaces `device_config_crc` and `config_applied` in `get_status`, so
 "I pushed it" and "it took" are separable facts.
 
+## `BUTTON_EVENT` — 6 bytes
+
+`KNOMI_BUTTON` sends the current config CRC as a big-endian `uint32`, then the
+button record index and pressed state as single bytes. `pressed` is 1 for press
+and 0 for release. The device accepts the event only if the CRC matches its
+current config, the index is in range, and that record has source `event`.
+Repeated presses and unmatched releases are ignored. A config replacement
+cancels held inputs without firing a release macro.
+
 ## `MESSAGE` — up to 127 bytes
 
 UTF-8 text for the operator: currently the first line of Klipper's shutdown
@@ -226,7 +251,8 @@ for opposite purposes — and it is why removing the macro list from the tick ha
 to move this somewhere rather than simply drop it.
 
 The device also writes its own faults here: `SHORT FRAME`, `BAD FRAME`,
-`MALFORMED PACKET`, `PROTO MISMATCH`.
+`MALFORMED PACKET`, `PROTO MISMATCH`, `BAD CONFIG`, `BAD BUTTON`,
+`BUTTON QUEUE`.
 
 ## `SNAPSHOT` — no payload
 
@@ -268,6 +294,13 @@ One line per message, newline-terminated:
     KNOMI_CMD:CFG?                  send config
     KNOMI_CMD:RPT:<k=v;k=v;...>     status report, every 2 s
     KNOMI_CMD:SNAP:...              screenshot, see above
+    KNOMI_CMD:BUTTON:<crc>:<index>:<P|R>  configured macro button edge
+
+`crc` is eight hexadecimal digits for the config payload. The host checks it,
+the index, the resolver, and the configured edge against its current binding
+table, then invokes the macro name held in `printer.cfg`. The device never
+sends a macro name in this command. A bare `resolver=gcode_macro NAME` emits
+only `R`; `press_resolver` and `release_resolver` emit their named edges.
 
 Reports are parsed permissively in both directions: unknown keys from newer
 firmware are ignored, and keys missing from older firmware simply stay absent
@@ -317,7 +350,7 @@ name:
 ```json
 {"T0_knomi": {"device_id": "19aa44", "port": "/dev/ttyUSB3",
               "addressed_by": "device_id", "build_variant": "knomi",
-              "firmware_version": "0.5.0", "protocol_version": 5,
+              "firmware_version": "0.6.0", "protocol_version": 6,
               "online": true, "tool": "0"}}
 ```
 
@@ -332,7 +365,7 @@ Deliberately excluded: heap, uptime, and the rest of the per-tick figures. Those
 are in each section's own `get_status`, and something polling the whole row for
 versions does not want them.
 
-## Reserved for a proto 5: screen templates
+## Future screen templates
 
 Not built. Written down because the shape was worked out and is worth not
 re-deriving, and because the decisions it implies are easier to make before

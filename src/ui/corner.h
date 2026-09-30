@@ -3,6 +3,9 @@
 
 #include <lvgl.h>
 
+#include "input/button_input.h"
+#include "printer/printer.h"
+
 namespace ui {
 namespace corner {
 
@@ -40,16 +43,11 @@ namespace corner {
 // was, the button chrome and the touch target go, and the screen's job narrows
 // to saying what the key under your finger will do. Nothing about the layout
 // moves in that transition, which is the point of putting them here early.
-enum class Slot {
-  kNW,
-  kNE,
-  kSW,
-  kSE,
-};
+using Slot = printer::ButtonSlot;
 
 lv_obj_t *create(
     lv_obj_t *parent, Slot slot, const char *symbol, lv_color_t color,
-    lv_event_cb_t cb);
+    input::button::page_action_t action, void *context = nullptr);
 
 //: Change what a corner says and means. Its position never moves - a control
 //: that relocates is a different control, and these have to stay where the

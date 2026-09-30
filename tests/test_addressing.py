@@ -36,7 +36,17 @@ class FakeGcmd:
         return default
 
     def get_int(self, key, default, minval=None, maxval=None):
-        return int(self.params[key]) if key in self.params else default
+        if key not in self.params:
+            return default
+        try:
+            value = int(self.params[key])
+        except (TypeError, ValueError):
+            raise self.error(f"{key} must be an integer") from None
+        if minval is not None and value < minval:
+            raise self.error(f"{key} must be at least {minval}")
+        if maxval is not None and value > maxval:
+            raise self.error(f"{key} must be at most {maxval}")
+        return value
 
 
 class FakeDevice:
@@ -225,8 +235,15 @@ _REQUIRED_OBJECT = object()
 
 
 class FakeGcodeRegistry:
+    def __init__(self):
+        self.commands = {}
+        self.scripts = []
+
     def register_command(self, *args, **kwargs):
-        pass
+        self.commands[args[0]] = args[1]
+
+    def run_script(self, script):
+        self.scripts.append(script)
 
 
 class FakeReactor:
@@ -271,6 +288,9 @@ class FakeSection:
 
     def get(self, key, default=None):
         return self.values.get(key, default)
+
+    def get_prefix_options(self, prefix):
+        return sorted(key for key in self.values if key.startswith(prefix))
 
     def getfloat(self, key, default=None, above=None):
         value = float(self.values[key]) if key in self.values else default
@@ -326,6 +346,293 @@ def test_move_speeds_must_be_positive():
 def test_numeric_tool_must_fit_the_signed_wire_field():
     refuses_section("tool", tool="T2147483648")
     configured(tool="T2147483647")
+
+
+def button(option, definition, **extra):
+    return configured(**{option: definition, **extra}).button_bindings[0]
+
+
+def refuses_button(option, definition, *phrases, **extra):
+    try:
+        configured(**{option: definition, **extra})
+    except FakeConfigError as e:
+        message = str(e)
+        for phrase in ("knomi_serial T0_knomi", option, *phrases):
+            if phrase not in message:
+                raise AssertionError(f"wrong reason: {e}") from None
+        return
+    raise AssertionError(f"accepted invalid {option}={definition!r}")
+
+
+def test_button_sources_and_resolvers_are_normalized():
+    feed = button(
+        "button_feed",
+        "source=gpio\npin=GPIO5\nresolver=observe FEED\nslot=NW",
+    )
+    check(
+        "GPIO observe",
+        (feed.name, feed.source.name, feed.pin, feed.resolver.name,
+         feed.argument, feed.slot.name),
+        ("feed", "GPIO", 5, "OBSERVE", 1, "NW"),
+    )
+
+    page = button(
+        "button_page",
+        "source=touch\nresolver=page\nslot=SE",
+    )
+    check(
+        "touch page",
+        (page.source.name, page.resolver.name, page.slot.name),
+        ("TOUCH", "PAGE", "SE"),
+    )
+
+
+def test_slotless_observed_buttons_leave_the_display_slots_available():
+    for source in ("source=event", "source=gpio\npin=GPIO5"):
+        feed = button("button_feed", source + "\nresolver=observe FEED")
+        check(
+            "slotless observe",
+            (feed.slot.name, feed.resolver.name, feed.argument),
+            ("NONE", "OBSERVE", 1),
+        )
+
+
+def test_macro_bindings_keep_names_on_the_host():
+    event = button(
+        "button_check",
+        "source=event\nresolver=gcode_macro CHECK_TOOL_FILAMENT_SENSORS",
+    )
+    check(
+        "bare macro is release",
+        (event.macro, event.press_macro, event.release_macro, event.legend),
+        ("CHECK_TOOL_FILAMENT_SENSORS", None,
+         "CHECK_TOOL_FILAMENT_SENSORS", b""),
+    )
+
+    touch = button(
+        "button_lights",
+        "source=touch\nslot=C\nlegend=LGT\n"
+        "resolver=gcode_macro TOGGLE_LIGHTS",
+    )
+    check(
+        "visible macro",
+        (touch.macro, touch.legend, touch.slot.name),
+        ("TOGGLE_LIGHTS", b"LGT", "C"),
+    )
+
+    edges = button(
+        "button_hold",
+        "source=gpio\npin=6\nslot=NONE\n"
+        "press_resolver=gcode_macro LIGHT_ON\n"
+        "release_resolver=gcode_macro LIGHT_OFF",
+    )
+    check(
+        "edge macros",
+        (edges.macro, edges.press_macro, edges.release_macro),
+        (None, "LIGHT_ON", "LIGHT_OFF"),
+    )
+
+
+def test_button_definitions_reject_bad_properties_and_combinations():
+    cases = (
+        ("source", "resolver=page\nslot=NW", ("source", "missing"), {}),
+        ("mystery", "source=event\nmystery=yes\nresolver=gcode_macro GO",
+         ("mystery", "yes"), {}),
+        ("source", "source=serial\nresolver=gcode_macro GO",
+         ("source", "serial"), {}),
+        ("slot", "source=touch\nslot=N\nresolver=page", ("slot", "N"), {}),
+        ("pin", "source=gpio\npin=GPIO10\nresolver=gcode_macro GO",
+         ("pin", "GPIO10"), {}),
+        ("pin", "source=event\npin=5\nresolver=gcode_macro GO",
+         ("pin", "5"), {}),
+        ("resolver", "source=event\nresolver=launch GO",
+         ("resolver", "launch GO"), {}),
+        ("resolver", "source=event\nresolver=gcode_macro SET_PIN PIN=laser VALUE=1",
+         ("resolver", "SET_PIN PIN=laser VALUE=1"), {}),
+        ("press_resolver", "source=event\npress_resolver=gcode_macro GO;M112",
+         ("press_resolver", "GO;M112"), {}),
+        ("legend", "source=touch\nslot=C\nlegend=TOOLONG\n"
+         "resolver=gcode_macro GO", ("legend", "TOOLONG"), {}),
+        ("legend", "source=event\nlegend=GO\nresolver=gcode_macro GO",
+         ("legend", "GO"), {}),
+        ("slot", "source=touch\nresolver=gcode_macro GO", ("slot", "NONE"), {}),
+        ("resolver", "source=touch\nslot=NW\nresolver=observe FEED",
+         ("resolver", "observe FEED"), {}),
+        ("resolver", "source=event\nslot=NW\nresolver=observe FAN",
+         ("resolver", "observe FAN"), {}),
+        ("resolver", "source=event\nresolver=internal SCREEN_OFF",
+         ("resolver", "internal SCREEN_OFF"), {}),
+        ("resolver", "source=event\nresolver=page EXTRA\nslot=NW",
+         ("resolver", "page EXTRA"), {}),
+        ("resolver", "source=event", ("resolver", "missing"), {}),
+        ("resolver", "source=event\nresolver=gcode_macro GO\n"
+         "release_resolver=gcode_macro STOP", ("resolver", "release_resolver"), {}),
+        ("press_resolver", "source=event\npress_resolver=observe FEED",
+         ("press_resolver", "observe FEED"), {}),
+        ("hardware_keys", "source=gpio\npin=5\nslot=NW\nresolver=page",
+         ("slot", "NW"), {"hardware_keys": "NW"}),
+    )
+    for suffix, definition, phrases, extra in cases:
+        refuses_button(f"button_{suffix}", definition, *phrases, **extra)
+
+
+def test_button_names_slots_pins_and_capacity_are_unique_and_bounded():
+    refuses_button(
+        "button_FEED",
+        "source=event\nresolver=gcode_macro GO",
+        "button_feed",
+        "duplicate",
+        button_feed="source=event\nresolver=gcode_macro STOP",
+    )
+    refuses_button(
+        "button_second",
+        "source=event\nslot=NW\nresolver=page",
+        "slot",
+        "NW",
+        button_first="source=event\nslot=NW\nresolver=page",
+    )
+    refuses_button(
+        "button_second",
+        "source=gpio\npin=5\nresolver=gcode_macro TWO",
+        "pin",
+        "5",
+        button_first="source=gpio\npin=5\nresolver=gcode_macro ONE",
+    )
+    values = {
+        f"button_b{i}": f"source=event\nresolver=gcode_macro M{i}"
+        for i in range(9)
+    }
+    refuses_button("button_b8", values.pop("button_b8"), "at most", "8", **values)
+
+
+def test_home_refuses_five_shared_slots_that_hide_an_action():
+    options = {
+        f"button_{slot.lower()}":
+        f"source=event\nslot={slot}\nresolver=gcode_macro SHARED_{slot}\nlegend={slot}"
+        for slot in ("NW", "NE", "C", "SW", "SE")
+    }
+    refuses_section("no room for every Home action", **options)
+    configured(pages="tool, move", **options)
+    configured(
+        hardware_keys="NW NE SW SE",
+        button_c="source=event\nslot=C\nresolver=gcode_macro CENTRE\nlegend=C",
+    )
+
+
+def button_devices(*definitions):
+    printer = FakePrinter()
+    devices = []
+    for index, options in enumerate(definitions):
+        device = configured(
+            printer, name=f"knomi_serial T{index}_knomi",
+            device_id=f"19aa4{index}", **options,
+        )
+        device.writes = []
+        device._write = device.writes.append
+        device.gcode = printer.objects["gcode"]
+        devices.append(device)
+    return printer, devices
+
+
+def test_knomi_button_registers_and_encodes_a_single_screen_event():
+    printer, (device,) = button_devices({
+        "button_feed": "source=event\nresolver=gcode_macro FEED",
+    })
+    command = printer.objects["gcode"].commands["KNOMI_BUTTON"]
+    command(FakeGcmd(BUTTON="FeEd", PRESSED="1"))
+    command(FakeGcmd(BUTTON="feed", PRESSED="0"))
+    check("press and release", device.writes, [
+        k.encode_button_event(device.config_crc, 0, True),
+        k.encode_button_event(device.config_crc, 0, False),
+    ])
+
+
+def test_knomi_button_validates_every_tool_target_before_writing():
+    printer, devices = button_devices(
+        {"button_a": "source=event\nresolver=gcode_macro A",
+         "button_feed": "source=event\nresolver=gcode_macro FEED", "tool": "0"},
+        {"button_feed": "source=touch\nslot=C\nlegend=FEED\n"
+                        "resolver=gcode_macro FEED", "tool": "0"},
+    )
+    command = printer.objects["gcode"].commands["KNOMI_BUTTON"]
+    try:
+        command(FakeGcmd(TOOL="0", BUTTON="feed", PRESSED="1"))
+    except FakeGcmd.error as e:
+        if "feed" not in str(e) or "event" not in str(e):
+            raise AssertionError(f"wrong refusal: {e}") from None
+    else:
+        raise AssertionError("accepted a touch binding as an external event")
+    check("no partial writes", [d.writes for d in devices], [[], []])
+
+    printer, devices = button_devices(
+        {"button_a": "source=event\nresolver=gcode_macro A",
+         "button_feed": "source=event\nresolver=gcode_macro FEED", "tool": "0"},
+        {"button_feed": "source=event\nresolver=gcode_macro FEED", "tool": "0"},
+    )
+    command = printer.objects["gcode"].commands["KNOMI_BUTTON"]
+    command(FakeGcmd(TOOL="0", BUTTON="FEED", PRESSED="0"))
+    check("different indexes", [d.writes for d in devices], [
+        [k.encode_button_event(devices[0].config_crc, 1, False)],
+        [k.encode_button_event(devices[1].config_crc, 0, False)],
+    ])
+
+    printer, devices = button_devices(
+        {"button_feed": "source=event\nresolver=gcode_macro FEED", "tool": "0"},
+        {"button_other": "source=event\nresolver=gcode_macro OTHER", "tool": "0"},
+    )
+    command = printer.objects["gcode"].commands["KNOMI_BUTTON"]
+    try:
+        command(FakeGcmd(TOOL="0", BUTTON="feed", PRESSED="1"))
+    except FakeGcmd.error:
+        pass
+    else:
+        raise AssertionError("accepted a missing binding on the second screen")
+    check("no writes for missing target", [d.writes for d in devices], [[], []])
+
+
+def test_knomi_button_refuses_missing_unknown_or_invalid_parameters():
+    printer, (device,) = button_devices({
+        "button_feed": "source=event\nresolver=gcode_macro FEED",
+    })
+    command = printer.objects["gcode"].commands["KNOMI_BUTTON"]
+    for params in (
+        {"PRESSED": "1"},
+        {"BUTTON": "unknown", "PRESSED": "1"},
+        {"BUTTON": "feed"},
+        {"BUTTON": "feed", "PRESSED": "2"},
+        {"BUTTON": "feed", "PRESSED": "perhaps"},
+    ):
+        try:
+            command(FakeGcmd(**params))
+        except FakeGcmd.error:
+            pass
+        else:
+            raise AssertionError(f"accepted invalid KNOMI_BUTTON {params!r}")
+    check("invalid commands send nothing", device.writes, [])
+
+
+def test_button_macro_commands_resolve_only_current_configured_edges():
+    printer, (device,) = button_devices({
+        "button_bare": "source=event\nresolver=gcode_macro BARE",
+        "button_edges": "source=event\npress_resolver=gcode_macro ON\n"
+                        "release_resolver=gcode_macro OFF",
+        "button_page": "source=event\nslot=NW\nresolver=page",
+    })
+    crc = f"{device.config_crc:08x}".encode()
+    for suffix in (b"0:R", b"1:P", b"1:R"):
+        device._process_cmd(b"BUTTON:" + crc + b":" + suffix)
+    check("configured macros", printer.objects["gcode"].scripts,
+          ["BARE", "ON", "OFF"])
+
+    stale = b"00000000" if crc != b"00000000" else b"ffffffff"
+    device._process_cmd(b"BUTTON:" + stale + b":0:R")
+    for invalid in (
+        b"broken:0:R", b"", b"0:P",
+        b"2:R", b"8:R", b"-1:R", b"1:X", b"1:R:EXTRA",
+    ):
+        device._process_cmd(b"BUTTON:" + crc + b":" + invalid)
+    check("invalid events ignored", printer.objects["gcode"].scripts,
+          ["BARE", "ON", "OFF"])
 
 
 class FakeTemperature:

@@ -21,7 +21,9 @@ namespace printer {
 //    and made the secondary readouts a configured list. The MCU pair stayed and
 //    is now shown, because on a toolchanger that MCU sits inside the heated
 //    chamber and its temperature is the one nobody else reports.
-static const unsigned int kProtoVersion = 5;
+// 6: config carries fixed button bindings and BUTTON_EVENT forwards a named
+//    host event by CRC-scoped record index.
+static const unsigned int kProtoVersion = 6;
 
 // Every frame is
 //
@@ -45,6 +47,8 @@ enum class Frame : uint8_t {
   //: scripts/screenshot.py. A developer and documentation tool - it holds the
   //: serial link for about fourteen seconds.
   kSnapshot = 0x04,
+  //: A host-observed button lifecycle, scoped to the config that named it.
+  kButtonEvent = 0x05,
 };
 
 static const unsigned int kFilamentTypeMaxLen = 15;
@@ -197,6 +201,7 @@ enum ConfigHas : uint32_t {
   kHasPageOrder      = 1u << 8,
   kHasEstopAt        = 1u << 9,
   kHasReadouts       = 1u << 10,
+  kHasButtons        = 1u << 11,
 };
 
 //: Which side of the page row the emergency stop hangs off.
@@ -259,6 +264,60 @@ enum KeySlot : uint8_t {
   kKeySE = 1u << 3,
 };
 
+enum class ButtonSource : uint8_t {
+  kNone  = 0,
+  kTouch = 1,
+  kGpio  = 2,
+  kEvent = 3,
+};
+
+enum class ButtonSlot : uint8_t {
+  kNone = 0,
+  kNW   = 1,
+  kNE   = 2,
+  kC    = 3,
+  kSW   = 4,
+  kSE   = 5,
+};
+
+enum class ButtonResolver : uint8_t {
+  kNone       = 0,
+  kPage       = 1,
+  kGcodeMacro = 2,
+  kObserve    = 3,
+  kInternal   = 4,
+};
+
+enum class ButtonProfile : uint8_t {
+  kNone    = 0,
+  kFeed    = 1,
+  kRetract = 2,
+};
+
+enum ButtonFlags : uint8_t {
+  kButtonBare    = 1u << 0,
+  kButtonPress   = 1u << 1,
+  kButtonRelease = 1u << 2,
+};
+
+static const unsigned int kMaxButtons = 8;
+static const unsigned int kButtonWireSize = 12;
+
+struct ButtonConfig {
+  ButtonSource source;
+  ButtonSlot slot;
+  ButtonResolver resolver;
+  uint8_t flags;
+  uint8_t pin;
+  uint8_t argument;
+  char legend[4];
+  uint8_t reserved[2];
+};
+
+static_assert(
+    sizeof(ButtonConfig) == kButtonWireSize,
+    "ButtonConfig wire layout changed: update _BUTTON_FMT and kProtoVersion");
+
 struct Config {
   //: Bitmask of ConfigHas. Only meaningful on the wire - once applied, every
   //: field holds either the host's value or the compiled-in default.
@@ -302,13 +361,17 @@ struct Config {
   //: can only be empty is worse than one that is absent.
   uint8_t page_order[kMaxPages];
 
+  //: Compact input bindings. Names and macro strings stay on the host; a
+  //: record index is meaningful only alongside this config payload's CRC.
+  ButtonConfig buttons[kMaxButtons];
+
   //: Newline-separated macro names for the gcode page. 256 bytes, and the
   //: reason proto 2 spent three quarters of its bandwidth restating a list
   //: that had not changed since Klipper started.
   char gcodes[kGcodesMaxLen + 1];
 };
 
-static const unsigned int kConfigWireSize = 292;
+static const unsigned int kConfigWireSize = 388;
 static_assert(
     sizeof(Config) == kConfigWireSize,
     "Config layout changed: update _CONFIG_FMT and kProtoVersion");

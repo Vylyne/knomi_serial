@@ -97,6 +97,30 @@
 // as off, present enough that the key beside it still has a legend.
 #define CORNER_DISABLED_OPA LV_OPA_30
 
+// Home's five controls share the 32.4 mm round face. The diagonal targets are
+// larger than their marks; displaced actions use the cardinal inner orbit.
+// Shift the corner centres inward from the 70px hardware legend positions so
+// a homed-state ring, not just its mark, fits behind the round bezel.
+#define HOME_CORNER_OFFSET 67
+#define HOME_TARGET_SIZE 66
+#define HOME_MARK_SIZE 38
+#define HOME_CENTRE_MARK_SIZE 50
+#define HOME_INNER_TARGET_SIZE 44
+#define HOME_INNER_MARK_SIZE 30
+#define HOME_INNER_OFFSET 62
+#define HOME_RING_GAP 4
+#define HOME_RING_WIDTH 2
+
+// Move's six actions form a compact XY pad and a separate Z rocker.
+#define MOVE_TARGET_SIZE 56
+#define MOVE_MARK_SIZE 38
+
+// Device-wired buttons close a configured GPIO to ground. Sample often enough
+// to keep release actions feeling immediate, but require four identical samples
+// before an edge reaches the normalized input queue.
+#define GPIO_POLL_MS 5
+#define GPIO_DEBOUNCE_MS 20
+
 // Destructive controls ask twice and forget the first ask after this.
 //
 // Not a press-and-hold. A hold reads as safer but is slower exactly when speed

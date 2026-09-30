@@ -4,6 +4,8 @@
 
 #include "board_conf.h"
 #include "diag/i2c_scan.h"
+#include "input/button_input.h"
+#include "input/gpio_input.h"
 #include "printer/config.h"
 #include "printer/printer.h"
 #include "printer/recv/recv_task.h"
@@ -29,6 +31,7 @@ void setup() {
   // racing the load. It means the first frame the display ever draws is already
   // in the user's colours rather than the firmware's defaults.
   printer::config::begin();
+  input::button::begin();
 
   xTaskCreate(
     ui::ui_task,
@@ -54,6 +57,15 @@ void setup() {
     4096,
     NULL,
     9,
+    NULL
+  );
+
+  xTaskCreate(
+    input::gpio::gpio_task,
+    "gpio",
+    2048,
+    NULL,
+    8,
     NULL
   );
 }

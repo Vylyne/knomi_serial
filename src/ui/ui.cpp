@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include "board_conf.h"
+#include "input/button_input.h"
 #include "printer/config.h"
 #include "printer/printer.h"
 #include "ui/haze.h"
@@ -41,6 +42,9 @@ void set_link_stale(bool stale) {
     return;
   }
   _stale = stale;
+  if (stale) {
+    input::button::cancel_all();
+  }
 
   if (!_stale_mark) {
     // On the top layer, built once. Every screen is destroyed and rebuilt on a
@@ -108,7 +112,10 @@ void update(const printer::State &state) {
   }
 
   if (next_scr_init) {
+    input::button::clear_page_actions();
     _scr = next_scr_init(state);
+    lv_obj_update_layout(_scr);
+    screen_helper::update_overlay(_scr);
     lv_screen_load_anim(_scr, LV_SCR_LOAD_ANIM_FADE_IN, 300, 0, true);
   }
 
@@ -147,7 +154,7 @@ int page_count() {
   // The row's children, not the screen's - the screen has two, the row and the
   // e-stop hanging below it.
   lv_obj_t *row = screen_helper::page_row(_scr);
-  return row ? (int)lv_obj_get_child_count(row) : 0;
+  return row ? (int)lv_obj_get_child_count(row) - 1 : 0;
 }
 
 int scroll_x() {

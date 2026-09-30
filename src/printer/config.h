@@ -27,8 +27,12 @@ void begin();
 //: goes stale - it stays readable, it just stops being current.
 const Config &get();
 
+//: Copy a coherent config and its CRC across the receive/UI/GPIO tasks.
+//: Prefer this for button bindings, whose indexes and pins must match the CRC.
+void snapshot(Config *out, uint32_t *crc);
+
 //: Adopt a config payload as it arrived: kConfigWireSize bytes, network order.
-//: Returns false if the payload is the wrong size.
+//: Returns false if the payload has the wrong size or unsafe button records.
 //:
 //: Writes it to flash if it differs from what is stored there - and only then.
 //: NVS is wear-levelled and a config changes a few times in a device's life,
@@ -51,9 +55,9 @@ uint32_t held_crc();
 //: would otherwise ask ten times a second forever.
 bool should_request(uint32_t host_crc, uint32_t now_ms);
 
-//: zlib-compatible CRC32. Bitwise: this runs over 276 bytes when config
-//: changes, which is a few times a day at most, so a 1KB table would cost more
-//: than it saves.
+//: zlib-compatible CRC32. Bitwise: this runs over kConfigWireSize bytes when
+//: config changes, which is a few times a day at most, so a 1KB table would
+//: cost more than it saves.
 uint32_t crc32(const void *data, uint32_t len);
 
 }

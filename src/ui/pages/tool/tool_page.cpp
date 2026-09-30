@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "board_conf.h"
+#include "input/button_input.h"
 #include "printer/send/send_cmd.h"
 #include "ui/corner.h"
 #include "ui/readouts.h"
@@ -50,8 +51,8 @@ static char _type[printer::kFilamentTypeMaxLen + 1] = {0};
 static int8_t _active = -1;
 static int8_t _busy = -1;
 
-static void _load_handler(lv_event_t *e);
-static void _unload_handler(lv_event_t *e);
+static void _load_handler(input::button::Phase phase, void *context);
+static void _unload_handler(input::button::Phase phase, void *context);
 static lv_obj_t *_init_dot(lv_obj_t *parent);
 
 //: Drop every cached value.
@@ -176,15 +177,15 @@ static lv_obj_t *_init_dot(lv_obj_t *parent) {
 // than the tap being swallowed in silence, and the guard is here rather than on
 // the touch region because the region is also what a physical key will replace
 // - a key cannot be dimmed, so the refusal has to live behind both of them.
-static void _load_handler(lv_event_t *e) {
-  if (_busy == 1) {
+static void _load_handler(input::button::Phase phase, void *) {
+  if (phase != input::button::Phase::kRelease || _busy == 1) {
     return;
   }
   printer::send::send_gcode("LOAD_FILAMENT");
 }
 
-static void _unload_handler(lv_event_t *e) {
-  if (_busy == 1) {
+static void _unload_handler(input::button::Phase phase, void *) {
+  if (phase != input::button::Phase::kRelease || _busy == 1) {
     return;
   }
   printer::send::send_gcode("UNLOAD_FILAMENT");

@@ -61,6 +61,32 @@ queued edges observed under an older CRC. These checks make config replacement
 safe even when input and UI tasks interleave. Exact records and commands are
 in [protocol.md](protocol.md#button_event--6-bytes).
 
+## Keep input dispatch in the UI task
+
+Host-forwarded and GPIO edges share one bounded input queue rather than a
+second receive-only queue. This gives both producers the same lifecycle path
+and keeps LVGL callbacks on the UI task, at the cost of shared backpressure.
+If the queue overflows, the UI cancels active inputs and clears it; GPIO does
+not consume an edge it failed to enqueue, so it can retry after the next poll.
+This is safer than losing a release and leaving a button logically held.
+
+All idle pages coexist, so page actions register with their page as owner,
+not as one global callback per slot. Touch supplies that exact owner; an
+external button resolves the page currently on the glass, then keeps the
+selected action through its press lifecycle. This avoids routing a release
+to a different page after a swipe. Live swipe behavior still needs the
+checks in [verification.md](verification.md#live-acceptance-checks).
+
+Config-change cancellation belongs to the UI task. The GPIO task releases
+and reconfigures pins and produces debounced edges, while the UI cancels held
+actions and rejects edges carrying an older config CRC. A held switch during
+a config swap remains a live-hardware verification case, not a proven result.
+
+E-stop is a full-page, two-tap control with its own press/release/cancel
+lifecycle, not one of the five semantic button slots. A future non-touch
+E-stop would need an explicit binding; it must not silently inherit a corner
+slot's dispatch. The display control is not a physical power-cut E-stop.
+
 ## Home follows the physical positions; Move does not
 
 Home has four diagonal actions matching optional physical switches and a

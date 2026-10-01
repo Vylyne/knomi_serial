@@ -1,4 +1,5 @@
 #include "display.h"
+#include "capture_coverage.h"
 
 #include <lvgl.h>
 #include <TFT_eSPI.h>
@@ -21,8 +22,9 @@ static volatile uint32_t _flush_px = 0;
 static volatile uint32_t _flush_us = 0;
 
 static uint16_t *_capture = nullptr;
+static uint8_t *_capture_seen = nullptr;
 static volatile bool _capturing = false;
-static volatile uint32_t _capture_px = 0;
+static CaptureCoverage _coverage(RES_H, RES_V);
 
 void _flush_display(lv_display_t *display, const lv_area_t *area, uint8_t *color);
 void _read_touchscreen(lv_indev_t *indev, lv_indev_data_t *data);
@@ -96,10 +98,14 @@ bool capture_begin() {
   if (!_capture) {
     _capture = (uint16_t *)ps_malloc((size_t)RES_H * RES_V * sizeof(uint16_t));
   }
-  if (!_capture) {
+  if (!_capture_seen) {
+    _capture_seen = (uint8_t *)ps_malloc(_coverage.bytes());
+  }
+  if (!_capture || !_capture_seen) {
+    capture_end();
     return false;
   }
-  _capture_px = 0;
+  _coverage.reset(_capture_seen);
   _capturing = true;
   // Nothing may have changed on screen for minutes, and LVGL only renders what
   // is dirty - so without this a capture of a still screen would collect
@@ -109,7 +115,7 @@ bool capture_begin() {
 }
 
 bool capture_complete() {
-  return _capturing && _capture_px >= (uint32_t)RES_H * RES_V;
+  return _capturing && _coverage.complete();
 }
 
 void capture_freeze() {
@@ -126,6 +132,10 @@ void capture_end() {
     free(_capture);
     _capture = nullptr;
   }
+  if (_capture_seen) {
+    free(_capture_seen);
+    _capture_seen = nullptr;
+  }
 }
 
 void _flush_display(lv_display_t *display, const lv_area_t *area, uint8_t *color) {
@@ -140,7 +150,8 @@ void _flush_display(lv_display_t *display, const lv_area_t *area, uint8_t *color
       memcpy(_capture + (area->y1 + row) * RES_H + area->x1, src, w * 2);
       src += w;
     }
-    _capture_px += w * h;
+    _coverage.mark(area->x1, area->y1, area->x2, area->y2,
+                   lv_display_flush_is_last(display));
   }
 
   uint32_t enter = micros();

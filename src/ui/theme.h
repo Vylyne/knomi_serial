@@ -26,13 +26,13 @@ namespace ui
     //: nothing anchors identity by hue alone, or loading pink ABS would erase it.
     lv_color_t machine();
 
+    //: Derived ink for the machine accent, cached in RAM. Refresh after the
+    //: saved config loads and whenever a new config is adopted.
+    void refresh_machine();
+    lv_color_t machine_ink();
+
     //: Black or white, whichever survives on `ground`.
-    //:
-    //: Nothing calls this yet. The printing page went to scrims instead, because
-    //: a label crossing the rising fill spends too long half over it for either
-    //: ink to work. This is here for the corner key legends, which sit at the
-    //: rim directly over the fill and are too small to scrim individually.
-    //: Verified against WCAG contrast for ten filament colours.
+    //: Uses sRGB relative luminance and the WCAG contrast crossover.
     lv_color_t ink_on(lv_color_t ground);
 
     //: Steel through amber to orange-red as `temp` closes on `target`.

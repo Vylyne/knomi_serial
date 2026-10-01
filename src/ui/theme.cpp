@@ -1,6 +1,7 @@
 #include "theme.h"
 
 #include "printer/config.h"
+#include "ui/contrast.h"
 #include "user_conf.h"
 
 namespace ui
@@ -27,6 +28,10 @@ namespace ui
           {255, 232, 110, 70},
       };
 
+      contrast::AccentInkCache _machine_palette;
+      lv_color_t _machine_color;
+      lv_color_t _machine_ink;
+
       uint8_t lerp(uint8_t a, uint8_t b, uint8_t num, uint8_t den)
       {
         if (den == 0)
@@ -37,30 +42,33 @@ namespace ui
       }
     }
 
+    void refresh_machine()
+    {
+      // config::begin() has already loaded NVS before the UI task starts. The
+      // derived ink is UI-only state, kept out of the fixed wire/NVS payload.
+      if (_machine_palette.update(printer::config::get().color_machine))
+      {
+        _machine_color = lv_color_hex(_machine_palette.rgb());
+        _machine_ink = _machine_palette.use_black()
+            ? lv_color_black() : lv_color_white();
+      }
+    }
+
     lv_color_t machine()
     {
-      // From the host, defaulting to the compile-time value. This one is pure
-      // taste - the whole reason config carries anything at all is that not
-      // everybody wants a pink machine.
-      return lv_color_hex(printer::config::get().color_machine);
+      return _machine_color;
+    }
+
+    lv_color_t machine_ink()
+    {
+      return _machine_ink;
     }
 
     lv_color_t ink_on(lv_color_t ground)
     {
-      // Weighted for perceived brightness rather than raw average - green
-      // carries most of it, so a saturated yellow reads as light and needs dark
-      // ink while a saturated blue of the same raw sum does not. The full sRGB
-      // luminance would want a pow() per channel; this integer approximation is
-      // close enough and runs inside the UI task's frame budget.
-      //
-      // The threshold is where black and white contrast *equally*, not where
-      // the colour looks "light". That crossover is a relative luminance of
-      // 0.179, which for a neutral maps back to sRGB 117 - noticeably darker
-      // than the midpoint. Putting it at 128 or above picks white over saturated
-      // oranges and blues, where black in fact scores two to three times the
-      // contrast.
-      uint32_t y = (299u * ground.red + 587u * ground.green + 114u * ground.blue) / 1000u;
-      return y > 117 ? lv_color_black() : lv_color_white();
+      uint32_t rgb = ((uint32_t)ground.red << 16) |
+                     ((uint32_t)ground.green << 8) | ground.blue;
+      return contrast::use_black(rgb) ? lv_color_black() : lv_color_white();
     }
 
     lv_color_t heat(int32_t temp, int32_t target)

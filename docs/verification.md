@@ -16,6 +16,16 @@ protocol described in the README; they do not introduce a new API.
   See the [Home](img/home.png), [Move](img/move.png), and
   [shared-button Move](img/move-shared.png) images. The script-driven capture
   does not prove a physical button interaction.
+- The unarmed [E-stop page](img/estop.png) was captured on COM5 after a manual
+  upward swipe. This does not verify the return gesture or either stop tap.
+- The revised Home palette was captured on COM5 [before homing](img/home-unhomed.png),
+  [after homing](img/home.png), with [QGL applied](img/home-applied.png), and
+  with a [red machine accent](img/home-red.png). These script-driven visual
+  captures do not prove Klipper's applied transition or re-verify touch actions.
+- The [shutdown screen](img/shutdown.png) was captured with the accent RESTART
+  button and contrasting label. Direct captures intermittently omitted static
+  labels at short settle times; the linked 30-second-settle capture is complete.
+  No live Klipper restart was exercised.
 - A wired GPIO switch, live shared-button routing, swipes, and end-to-end
   command counts have not been verified. A successful build is not a switch
   test, and a touch hit is not proof that Klipper ran exactly one command.
@@ -42,6 +52,13 @@ display ID, and the action observed for each run.
   target against a safe command sink or simulator. Confirm exactly one intended
   command per committed tap, and none for a canceled or press-lost gesture.
   Keep the existing busy/disabled guards in force.
+- [ ] **Tramming applied state:** With a live Klipper QGL or Z-tilt object,
+  confirm the Home tramming mark gains the accent only after `applied` becomes
+  true, and returns to neutral when Klipper clears it (including motor-off).
+- [ ] **Shutdown restart:** Induce a safe Klipper shutdown with the process and
+  serial link still running. Confirm the shutdown reason appears, RESTART
+  requests `firmware_restart` exactly once, and the display leaves shutdown
+  after recovery. A `--drive shutdown` screenshot proves appearance only.
 - [ ] **Shared positions:** Test visible FEED/RETRACT or another shared binding
   at NE and SE. Confirm its legend/action owns the slot, a displaced Home action
   remains reachable as touch-only, and both Move Z controls remain on the

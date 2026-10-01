@@ -12,6 +12,7 @@
 #include "ui/screens/init/init_screen.h"
 #include "ui/screens/printing/printing_screen.h"
 #include "ui/screens/shutdown/shutdown_screen.h"
+#include "ui/theme.h"
 #include "user_conf.h"
 
 namespace ui {
@@ -35,6 +36,7 @@ void init() {
   lv_init();
   lv_tick_set_cb([]() { return (uint32_t) millis(); });
   _lv_event_printer_update = static_cast<lv_event_code_t>(lv_event_register_id());
+  theme::refresh_machine();
 }
 
 void set_link_stale(bool stale) {
@@ -91,6 +93,9 @@ void update(const printer::State &state) {
   uint32_t config_crc = printer::config::held_crc();
   bool reconfigured = config_crc != _built_config;
   _built_config = config_crc;
+  if (reconfigured) {
+    theme::refresh_machine();
+  }
 
   scr_init_t next_scr_init = nullptr;
   if (state.status != _status || !_scr || reconfigured) {

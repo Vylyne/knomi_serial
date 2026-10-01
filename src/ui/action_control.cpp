@@ -74,19 +74,6 @@ Control create(
     lv_obj_remove_flag(result.target, LV_OBJ_FLAG_CLICKABLE);
   }
 
-  result.ring = lv_obj_create(parent);
-  lv_obj_remove_style_all(result.ring);
-  lv_obj_remove_flag(result.ring, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_remove_flag(result.ring, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_set_size(result.ring, mark_size + HOME_RING_GAP * 2,
-                  mark_size + HOME_RING_GAP * 2);
-  lv_obj_set_style_radius(result.ring, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-  lv_obj_set_style_border_width(result.ring, HOME_RING_WIDTH, LV_PART_MAIN);
-  lv_obj_set_style_border_color(result.ring, COLOR_HOMED_BG, LV_PART_MAIN);
-  lv_obj_set_style_border_opa(result.ring, LV_OPA_COVER, LV_PART_MAIN);
-  lv_obj_align(result.ring, LV_ALIGN_CENTER, x, y);
-  lv_obj_add_flag(result.ring, LV_OBJ_FLAG_HIDDEN);
-
   result.mark = lv_obj_create(parent);
   lv_obj_remove_style_all(result.mark);
   lv_obj_remove_flag(result.mark, LV_OBJ_FLAG_SCROLLABLE);
@@ -113,15 +100,13 @@ void set_enabled(const Control &control, bool enabled) {
   }
 }
 
-void set_ring(const Control &control, bool visible) {
-  if (!control.ring) {
+void set_fill(const Control &control, lv_color_t fill, lv_color_t ink) {
+  if (!control.mark || !control.label) {
     return;
   }
-  if (visible) {
-    lv_obj_remove_flag(control.ring, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    lv_obj_add_flag(control.ring, LV_OBJ_FLAG_HIDDEN);
-  }
+  lv_obj_set_style_bg_color(control.mark, fill, LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(control.mark, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_text_color(control.label, ink, LV_PART_MAIN);
 }
 
 }

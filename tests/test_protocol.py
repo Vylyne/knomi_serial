@@ -77,6 +77,17 @@ def test_protocol_version():
     check("protocol version", const("kProtoVersion"), k._PROTO_VERSION)
 
 
+def test_tram_applied_contract_uses_protocol_7():
+    check("tram applied protocol", k._PROTO_VERSION, 7)
+    frame = k.encode_state(k.PrinterState(
+        status=k.PrinterStatus.IDLE,
+        tram_type=k.PrinterTramType.QGL,
+        tram_applied=True,
+    ))
+    check("applied flag", frame[7 + 11], 1)
+    check("tram type after flags", frame[7 + 12], k.PrinterTramType.QGL.value)
+
+
 def test_payload_sizes():
     # The two that matter most: a disagreement here is a display reading every
     # field from the wrong offset.

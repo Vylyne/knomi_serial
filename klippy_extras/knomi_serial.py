@@ -71,20 +71,21 @@ _UNKNOWN = -1
 #:    now shown: on a toolchanger that MCU sits in the heated chamber.
 #: 6: config carries fixed button bindings and BUTTON_EVENT forwards a named
 #:    host event by CRC-scoped record index.
-_PROTO_VERSION = 6
+#: 7: STATE carries whether the selected QGL/Z-tilt adjustment is applied.
+_PROTO_VERSION = 7
 
 #: The state frame's payload, field for field against `struct State` in
 #: src/printer/printer.h, down to and including filament_type. `!` means network
 #: order and no padding of its own, so the layout here is the struct's layout.
 #:
-#: 80 bytes, against proto 2's 332. The macro list was 256 of those and had not
+#: 84 bytes, against proto 2's 332. The macro list was 256 of those and had not
 #: changed since Klipper started; at 10Hz it alone was 2.5 kB/s of an 11.5 kB/s
 #: link, spent restating a constant. It now goes in _CONFIG_FMT, sent when the
 #: device asks for it.
 #:
 #: Changing this means changing that struct, bumping _PROTO_VERSION, and
 #: updating the static_asserts that pin its size.
-_STATE_FMT = "!I7?B10iIiI16s"
+_STATE_FMT = "!I8?B3x10iIiI16s"
 _STATE_SIZE = struct.calcsize(_STATE_FMT)
 
 #: The config frame's payload, against `struct Config`. The fourth byte was
@@ -460,6 +461,7 @@ def encode_state(state):
         state.homed_z,
         state.used,
         state.active,
+        state.tram_applied,
         state.tram_type.value,
         int(state.hotend_temp),
         int(state.hotend_target),
@@ -857,6 +859,18 @@ class PrinterTramType(enum.Enum):
     QGL = 0x02
 
 
+def select_tram(printer):
+    """Use the same Klipper object for the Home action and its applied state."""
+    for name, tram_type in (
+        ("z_tilt", PrinterTramType.ZTA),
+        ("quad_gantry_level", PrinterTramType.QGL),
+    ):
+        obj = printer.lookup_object(name, None)
+        if obj is not None:
+            return tram_type, obj
+    return PrinterTramType.NONE, None
+
+
 class ButtonSource(enum.IntEnum):
     NONE = 0
     TOUCH = 1
@@ -912,6 +926,7 @@ class PrinterState:
     homed_x: bool = False
     homed_y: bool = False
     homed_z: bool = False
+    tram_applied: bool = False
     used: bool = True
     active: bool = False
 
@@ -988,6 +1003,7 @@ class SharedState:
     homed_x: bool = False
     homed_y: bool = False
     homed_z: bool = False
+    tram_applied: bool = False
     bed_temp: float = 0
     bed_target: float = 0
     chamber_temp: float = 0
@@ -1049,6 +1065,7 @@ class KnomiCluster:
         self.last_busy = 0
         self.was_printing = False
         self.tram_type = PrinterTramType.NONE
+        self.tram_object = None
 
         self.gcode.register_command(
             "KNOMI_TOOL",
@@ -1347,12 +1364,7 @@ class KnomiCluster:
         # nothing else.
         self.motion_report = self.printer.lookup_object("motion_report", None)
 
-        if self.printer.lookup_object("z_tilt", None):
-            self.tram_type = PrinterTramType.ZTA
-        elif self.printer.lookup_object("quad_gantry_level", None):
-            self.tram_type = PrinterTramType.QGL
-        else:
-            self.tram_type = PrinterTramType.NONE
+        self.tram_type, self.tram_object = select_tram(self.printer)
 
         self.reactor.register_timer(self._handle_update, self.reactor.NOW)
         self.reactor.register_timer(self._handle_read, self.reactor.NOW)
@@ -1534,6 +1546,7 @@ class KnomiCluster:
             homed_x="x" in homed,
             homed_y="y" in homed,
             homed_z="z" in homed,
+            tram_applied=self._tram_applied(eventtime),
             bed_temp=bed_temp,
             bed_target=bed_target,
             chamber_temp=chamber_temp,
@@ -1543,6 +1556,11 @@ class KnomiCluster:
             active_extruder=self.toolhead.get_extruder().get_name(),
             flow=self._flow(eventtime),
         )
+
+    def _tram_applied(self, eventtime):
+        if self.tram_object is None:
+            return False
+        return bool(self.tram_object.get_status(eventtime).get("applied", False))
 
     def _flow(self, eventtime):
         """Extrusion rate in micrometres per second, signed.
@@ -2139,6 +2157,7 @@ class Knomi_Serial:
                 homed_x=shared.homed_x,
                 homed_y=shared.homed_y,
                 homed_z=shared.homed_z,
+                tram_applied=shared.tram_applied,
                 used=tool.used,
                 active=active,
                 hotend_temp=hotend_temp,

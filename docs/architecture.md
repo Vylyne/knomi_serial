@@ -70,6 +70,13 @@ do not cover jog targets. The legacy `hardware_keys` mask only suppresses touch
 at a position; it does not define an input or synthesize an action. The E-stop
 page hides shared legends, while wired and host-forwarded inputs still run.
 
+The UI theme keeps a RAM-only machine-accent palette: the accent and its
+contrasting black/white ink are derived on startup from the loaded config and
+updated on accent changes. The wire config remains the source of truth; it does
+not carry a derived ink field. Home receives the selected QGL/Z-tilt object's
+`applied` status in the shared state tick, independently of axis homing, and
+uses the accent palette for that control only while adjustment is applied.
+
 Touch, GPIO, and host events normalize to press, committed release, or cancel.
 The UI task owns lifecycle and page/observation callbacks; a GPIO or serial
 task never calls LVGL. Duplicate presses and unmatched releases are inert.
@@ -90,7 +97,7 @@ syntax, and [verification.md](verification.md) tracks the remaining checks.
 - `internal` is reserved as a button resolver but rejected by configuration
   until an action exists. `observe` currently supports FEED and RETRACT and
   never initiates either action.
-- Protocol 5 and 6 are not mixed; firmware and Klipper extra must agree.
+- Protocol versions are not mixed; firmware and Klipper extra must agree.
 - The Home/Move layouts were captured on a real panel and their touch controls
   checked. Swipe/shared-button routing, command-level action counts, and live
   GPIO behavior remain open; see [verification.md](verification.md).

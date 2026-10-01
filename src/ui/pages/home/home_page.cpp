@@ -14,9 +14,9 @@ static_assert(HOME_TARGET_SIZE <= HOME_CORNER_OFFSET,
               "Home centre and diagonal hit targets must not overlap");
 static_assert(
     2 * HOME_CORNER_OFFSET * HOME_CORNER_OFFSET <=
-        (RES_H / 2 - (HOME_MARK_SIZE + 2 * HOME_RING_GAP) / 2 - 1) *
-            (RES_H / 2 - (HOME_MARK_SIZE + 2 * HOME_RING_GAP) / 2 - 1),
-    "Home corner rings must fit within the round display");
+        (RES_H / 2 - HOME_MARK_SIZE / 2 - 1) *
+            (RES_H / 2 - HOME_MARK_SIZE / 2 - 1),
+    "Home corner marks must fit within the round display");
 
 namespace ui {
 namespace home_page {
@@ -37,6 +37,7 @@ printer::TramType _tram_type = printer::TramType::kNone;
 bool _busy = false;
 int8_t _shown_busy = -1;
 int8_t _shown_homed[4] = {-1, -1, -1, -1};
+int8_t _shown_tram = -1;
 bool _inner_used[4] = {};
 
 uint8_t _legacy_bit(printer::ButtonSlot slot) {
@@ -146,8 +147,12 @@ void _create_action(
       (input::button::slot_touch_enabled(slot) &&
        !(printer::config::get().key_mask & _legacy_bit(slot)));
   _controls[id] = action_control::create(
-      page, x, y, target_size, mark_size, symbol, font, theme::machine(),
+      page, x, y, target_size, mark_size, symbol, font, lv_color_white(),
       touch, route, _action, (void *)(uintptr_t)id);
+  if (id == kTram) {
+    // Until Klipper reports it applied, tramming is a neutral action.
+    action_control::set_fill(_controls[id], lv_color_black(), lv_color_white());
+  }
 }
 
 }
@@ -163,6 +168,7 @@ lv_obj_t *init(lv_obj_t *parent, const printer::State &state) {
   for (int8_t &shown : _shown_homed) {
     shown = -1;
   }
+  _shown_tram = -1;
   for (bool &used : _inner_used) {
     used = false;
   }
@@ -205,7 +211,20 @@ void printer_update(const printer::State &state) {
   for (uint8_t i = 0; i < 4; i++) {
     if (homed[i] != _shown_homed[i]) {
       _shown_homed[i] = homed[i];
-      action_control::set_ring(_controls[ids[i]], homed[i] != 0);
+      action_control::set_fill(
+          _controls[ids[i]],
+          homed[i] ? theme::machine() : lv_color_black(),
+          homed[i] ? theme::machine_ink() : lv_color_white());
+    }
+  }
+  if (_controls[kTram].label) {
+    int8_t applied = state.tram_applied ? 1 : 0;
+    if (applied != _shown_tram) {
+      _shown_tram = applied;
+      action_control::set_fill(
+          _controls[kTram],
+          applied ? theme::machine() : lv_color_black(),
+          applied ? theme::machine_ink() : lv_color_white());
     }
   }
 }

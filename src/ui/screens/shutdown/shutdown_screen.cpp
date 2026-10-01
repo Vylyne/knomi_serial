@@ -2,6 +2,7 @@
 
 #include "printer/send/send_cmd.h"
 #include "ui/pages/page_helper.h"
+#include "ui/theme.h"
 #include "ui/ui.h"
 
 namespace ui {
@@ -22,11 +23,13 @@ lv_obj_t *init(const printer::State &state) {
 
   lv_obj_t *title = lv_label_create(scr);
   lv_label_set_text(title, "SHUTDOWN");
+  lv_obj_set_style_text_color(title, lv_color_white(), LV_PART_MAIN);
   lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 15);
 
   _message = lv_label_create(scr);
   lv_label_set_long_mode(_message, LV_LABEL_LONG_WRAP);
   lv_label_set_text(_message, "");
+  lv_obj_set_style_text_color(_message, lv_color_white(), LV_PART_MAIN);
   lv_obj_set_width(_message, 180);
   lv_obj_align(_message, LV_ALIGN_CENTER, 0, -25);
   lv_obj_set_style_text_align(_message, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
@@ -38,6 +41,9 @@ lv_obj_t *init(const printer::State &state) {
     "RESTART",
     _restart_click_handler
   );
+  lv_obj_set_style_bg_color(_restart, theme::machine(), LV_PART_MAIN);
+  lv_obj_set_style_text_color(
+      lv_obj_get_child(_restart, 0), theme::machine_ink(), LV_PART_MAIN);
 
   return scr;
 }

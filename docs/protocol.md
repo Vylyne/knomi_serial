@@ -42,11 +42,11 @@ link, or **29.5%** of the port, permanently.
 at startup and cannot change while Klipper is running. The link spent three
 quarters of its budget restating a constant.
 
-Proto 5's state frame is 80 bytes of payload, 91 on the wire: **7.9%**. What
+Proto 7's state frame is 84 bytes of payload, 95 on the wire: **8.2%**. What
 left the tick did not disappear — it moved to a channel that only carries it
 when it changes, or it left because nothing was reading it.
 
-## `STATE` — 80 bytes
+## `STATE` — 84 bytes
 
 Matches `struct State` in `src/printer/printer.h` down to `filament_type`, and
 `_STATE_FMT` in `klippy_extras/knomi_serial.py`. Both files carry a
@@ -55,15 +55,16 @@ Matches `struct State` in `src/printer/printer.h` down to `filament_type`, and
 | Offset | Type       | Field                                      |
 |--------|------------|--------------------------------------------|
 | 0      | `uint32`   | `status` — disconnected/idle/printing/shutdown |
-| 4      | `bool`×7   | `working` `paused` `homed_x/y/z` `used` `active` |
-| 11     | `uint8`    | `tram_type` |
-| 12     | `int32`×8  | hotend, bed, chamber, mcu — each temp then target |
-| 44     | `int32`    | `progress`, 0–100 |
-| 48     | `int32`    | `tool_number`, −1 for none |
-| 52     | `uint32`   | `filament_color`, `0x00RRGGBB`; 0 means unknown, not black |
-| 56     | `int32`    | `flow` — extrusion rate, µm of filament per second, signed |
-| 60     | `uint32`   | `config_crc` |
-| 64     | `char[16]` | `filament_type`, NUL-padded |
+| 4      | `bool`×8   | `working` `paused` `homed_x/y/z` `used` `active` `tram_applied` |
+| 12     | `uint8`    | `tram_type` |
+| 13     | `byte[3]`  | zero padding to align the `int32` block |
+| 16     | `int32`×8  | hotend, bed, chamber, mcu — each temp then target |
+| 48     | `int32`    | `progress`, 0–100 |
+| 52     | `int32`    | `tool_number`, −1 for none |
+| 56     | `uint32`   | `filament_color`, `0x00RRGGBB`; 0 means unknown, not black |
+| 60     | `int32`    | `flow` — extrusion rate, µm of filament per second, signed |
+| 64     | `uint32`   | `config_crc` |
+| 68     | `char[16]` | `filament_type`, NUL-padded |
 
 Proto 5 removed `eta`, `elapsed`, `layer` and `layer_total`. They were added
 speculatively and no screen ever read them — sixteen bytes sampled, packed, sent
@@ -77,9 +78,10 @@ It keeps a target because `sensor_mcu:` may name a `temperature_fan`, which has
 one; a plain `temperature_sensor` reports zero and the target is simply not
 drawn.
 
-The seven flags and the one-byte tram type exactly fill the gap after `status`,
-which is what keeps the `int32` block 4-byte aligned. Adding a flag consumes
-that padding rather than shifting everything below it.
+Proto 7 added `tram_applied` from the selected Klipper QGL or Z-tilt object's
+`applied` status. The eight flags and one-byte tram type require three zero
+padding bytes before the aligned `int32` block. The device uses the applied
+flag only when a tramming action exists on Home.
 
 ### `flow` is a rate, and comes from `motion_report`
 
@@ -267,9 +269,9 @@ as lines of base64 on the link that is already open.
     KNOMI_CMD:SNAP:<512 chars of base64>     x300
     KNOMI_CMD:SNAP:END
 
-384 raw bytes per line. About fourteen seconds for a 240×240 frame, during which
-the UI is doing nothing else — a developer and documentation tool, not something
-to poll.
+384 raw bytes per line. About fourteen seconds for a 240×240 frame. The image
+is frozen before transfer, while the UI continues updating — this is a
+developer and documentation tool, not something to poll.
 
 The frame is collected in the flush callback rather than with `lv_snapshot`.
 Every pixel that reaches the panel already passes through there, so this needs
@@ -279,6 +281,10 @@ re-rendering of what should have been. It lands in PSRAM, 8MB of which is
 otherwise unused on this part. `capture_begin` invalidates the screen first,
 because LVGL only renders what is dirty and a still screen would otherwise
 produce nothing at all.
+Capture completes only after every distinct pixel has appeared in a flush and
+LVGL has signalled the last flush of that render;
+counting flushed area would falsely finish early if LVGL repainted the same
+region twice, leaving holes in the image.
 
 Raw RGB565 rather than anything compressed: PNG on the device would want a
 deflate implementation and the RAM to run it, to halve a transfer that happens

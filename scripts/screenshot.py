@@ -11,6 +11,7 @@ Nothing else may be driving the port at the time - stop Klipper, or use
 --drive to have this script feed the display a state of its own first:
 
     python scripts/screenshot.py COM5 --drive printing -o docs/img/printing.png
+    python scripts/screenshot.py COM5 --drive init -o init.png
 
 Select one idle page as the landing page for focused UI work:
 
@@ -57,18 +58,20 @@ PRESETS = {
     "heating": dict(status=k.PrinterStatus.IDLE, hotend_temp=160, working=True),
     "shutdown": dict(status=k.PrinterStatus.SHUTDOWN),
     "waiting": dict(status=k.PrinterStatus.DISCONNECTED),
+    "init": dict(status=k.PrinterStatus.DISCONNECTED),
 }
 
-#: What the shutdown screen has to say. Klipper sends this on its own frame, so
-#: a preset that only sets the status would photograph whatever message the
-#: display happened to be holding.
+#: Klipper sends messages on their own frame. Explicitly clear one for the
+#: clean Init spinner, or a previous shutdown error remains on that screen.
 MESSAGES = {
     "shutdown": "MCU 'MCU' SHUTDOWN: LOST COMMUNICATION",
     "waiting": "MCU 'MCU' SHUTDOWN: LOST COMMUNICATION",
+    "init": "",
 }
 
 
-def state_for(preset, config_crc, color=0x9572BF, ftype=b"ABS", tram="none"):
+def state_for(preset, config_crc, color=0x9572BF, ftype=b"ABS", tram="none",
+              homed=True, tram_applied=False):
     # Deliberately not the machine's own pink. The two colours mean different
     # things - one is the printer, one is what is loaded in it - and a
     # documentation shot that uses the same value for both cannot show that.
@@ -79,7 +82,8 @@ def state_for(preset, config_crc, color=0x9572BF, ftype=b"ABS", tram="none"):
             "qgl": k.PrinterTramType.QGL,
             "zta": k.PrinterTramType.ZTA,
         }[tram],
-        homed_x=True, homed_y=True, homed_z=True,
+        tram_applied=tram_applied,
+        homed_x=homed, homed_y=homed, homed_z=homed,
         used=True, active=True, tool_number=0,
         hotend_temp=243, hotend_target=245,
         bed_temp=100, bed_target=100,
@@ -207,7 +211,8 @@ def shoot(port, out, preset, config, config_crc, args, quiet_first=False):
         except ValueError:
             sys.exit(f"  --color '{args.color}' is not hex")
         frame = state_for(
-            preset, config_crc, color, args.type.encode("utf-8")[:15], args.tram)
+            preset, config_crc, color, args.type.encode("utf-8")[:15], args.tram,
+            homed=not args.unhomed, tram_applied=args.tram_applied)
         if verbose:
             print(f"  {os.path.basename(out):<16} driving '{preset}'")
 
@@ -215,9 +220,16 @@ def shoot(port, out, preset, config, config_crc, args, quiet_first=False):
         # long enough to boot, ask for config and load its screen.
         deadline = time.time() + max(args.settle, 3.0)
         buf = b""
-        if preset in MESSAGES:
-            port.write(k.encode_message(MESSAGES[preset]))
+        message_frame = (k.encode_message(MESSAGES[preset])
+                         if preset in MESSAGES else None)
+        next_message = 0.0
         while time.time() < deadline:
+            now = time.time()
+            if message_frame is not None and now >= next_message:
+                # Opening serial can reset the display. A one-shot message can
+                # vanish during boot even though the repeated state arrives.
+                port.write(message_frame)
+                next_message = now + 0.5
             port.write(frame)
             if port.in_waiting:
                 buf += port.read(port.in_waiting)
@@ -255,6 +267,7 @@ def shoot(port, out, preset, config, config_crc, args, quiet_first=False):
 #: happens after every visual change, and reassembling the commands by hand each
 #: time is how the stale shot ended up being taken three different ways.
 DOC_SHOTS = [
+    ("init", "init", False),
     ("waiting", "waiting", False),
     ("heating", "heating", False),
     ("idle", "idle", False),
@@ -264,7 +277,17 @@ DOC_SHOTS = [
 ]
 
 
-def build_config(page=None, shared_buttons=False, slotless_buttons=False):
+def parse_machine_color(value):
+    digits = value.strip()
+    if digits.startswith("#"):
+        digits = digits[1:]
+    if len(digits) != 6 or any(c not in "0123456789abcdefABCDEF" for c in digits):
+        raise ValueError("machine accent must be RRGGBB")
+    return int(digits, 16)
+
+
+def build_config(page=None, shared_buttons=False, slotless_buttons=False,
+                 color_machine=0xFFA7C4):
     """The deterministic config used while driving documentation states."""
     if shared_buttons and slotless_buttons:
         raise ValueError("shared and slotless button demos are exclusive")
@@ -292,7 +315,7 @@ def build_config(page=None, shared_buttons=False, slotless_buttons=False):
         )
     return k.DeviceConfig(
         present=present,
-        color_machine=0xFFA7C4,
+        color_machine=color_machine,
         pages=pages,
         buttons=buttons,
         gcodes=b"HOME\nQGL\nPURGE\nCLEAN_NOZZLE",
@@ -324,6 +347,12 @@ def main():
                              help="configure demo FEED/RETRACT observers with no visible slots")
     p.add_argument("--tram", choices=("none", "qgl", "zta"), default="none",
                    help="show QGL or ZTA on the Home page while driving state")
+    p.add_argument("--tram-applied", action="store_true",
+                   help="show the Home QGL/ZTA action as applied")
+    p.add_argument("--unhomed", action="store_true",
+                   help="show X/Y/Z and home-all before homing")
+    p.add_argument("--machine-color", default="FFA7C4",
+                   help="machine accent for --drive, RRGGBB (default FFA7C4)")
     p.add_argument("--color", "--colour", dest="color", default="9572BF",
                    help="filament colour for --drive, RRGGBB (default 9572BF, "
                         "chosen to differ from the machine accent)")
@@ -338,9 +367,14 @@ def main():
     # The accent is set explicitly rather than left to the firmware default,
     # because the device now remembers the last config it was given - so a shot
     # taken after somebody's experiment would quietly inherit their colour.
+    try:
+        machine_color = parse_machine_color(args.machine_color)
+    except ValueError:
+        p.error("--machine-color must be RRGGBB")
     config = build_config(
         args.page, shared_buttons=args.shared_buttons,
-        slotless_buttons=args.slotless_buttons)
+        slotless_buttons=args.slotless_buttons,
+        color_machine=machine_color)
     config_crc = zlib.crc32(k.config_payload(config))
 
     try:

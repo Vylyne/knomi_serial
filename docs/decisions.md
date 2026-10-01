@@ -100,6 +100,17 @@ binding needs room, both Z controls stay on the edge and move closer together.
 These layouts were judged on the actual 240-pixel, 32.4 mm round panel rather
 than desktop-sized mockups.
 
+Home uses an opaque black mark with a white symbol until an axis is homed.
+Homed axes and home-all use a solid machine-accent mark instead of an extra
+ring; QGL/ZTA remains neutral until Klipper reports its adjustment as applied.
+That state is distinct from axis homing and follows the selected QGL or Z-tilt
+object. Accent symbols
+use whichever of black or white has greater sRGB contrast. The UI caches that
+derived ink when the saved config loads and when the accent changes, without
+adding a field to the fixed wire or flash payload. The shutdown RESTART button
+uses the same accent/ink pair so a changed machine colour does not leave it
+with an unrelated fixed fill.
+
 ## Keep the serial tool contract narrow and explicit
 
 The display does not run a Moonraker or Wi-Fi client. Klipper owns its serial

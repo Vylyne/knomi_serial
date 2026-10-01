@@ -12,7 +12,6 @@ struct Control {
   lv_obj_t *target = nullptr;
   lv_obj_t *mark = nullptr;
   lv_obj_t *label = nullptr;
-  lv_obj_t *ring = nullptr;
 };
 
 //: Offsets are measured from the centre of a 240-pixel page. A page slot routes
@@ -24,7 +23,7 @@ Control create(
     input::button::page_action_t action = nullptr, void *context = nullptr);
 
 void set_enabled(const Control &control, bool enabled);
-void set_ring(const Control &control, bool visible);
+void set_fill(const Control &control, lv_color_t fill, lv_color_t ink);
 
 }
 }

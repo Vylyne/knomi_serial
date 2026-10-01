@@ -7,9 +7,9 @@ the Klipper host.**
 No WiFi, no IP address, no Moonraker. The display is a USB device on the Klipper
 machine, and a `klippy_extras` module talks to it directly.
 
-| Waiting | Heating | Tool, at temperature | Printing | Shutdown |
-| :---: | :---: | :---: | :---: | :---: |
-| <img src="docs/img/waiting.png" width="130"> | <img src="docs/img/heating.png" width="130"> | <img src="docs/img/idle.png" width="130"> | <img src="docs/img/printing.png" width="130"> | <img src="docs/img/shutdown.png" width="130"> |
+| Init | Waiting after error | Heating | Tool, at temperature | Printing | Shutdown |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| <img src="docs/img/init.png" width="130"> | <img src="docs/img/waiting.png" width="130"> | <img src="docs/img/heating.png" width="130"> | <img src="docs/img/idle.png" width="130"> | <img src="docs/img/printing.png" width="130"> | <img src="docs/img/shutdown.png" width="130"> |
 
 <sup>Real captures off the glass — `python scripts/screenshot.py COM5 --all`.
 Taken with the stock accent, `color_machine: FFA7C4`, against a `9572BF`
@@ -93,6 +93,8 @@ and [hardware notes](docs/hardware.md) carry their respective technical details.
 
 - [ ] Verify Home/Move swipes, shared-button routing, and command counts on a
   safe Klipper instance; see [the live checklist](docs/verification.md).
+- [ ] Verify the live QGL/Z-tilt applied transition and shutdown RESTART action
+  with Klipper; script-driven display captures do not exercise either host path.
 - [ ] Verify corner switches wired directly to display GPIO, including
   debounce and config replacement; see [the live checklist](docs/verification.md).
 
@@ -106,17 +108,22 @@ every page rather than several along. `estop_at: bottom` (the default) means
 drag up to reach it; `top` is the notification-shade gesture. It is never in
 `pages:` and cannot be configured away.
 
-The Home page places X and Y on the upper diagonals, home-all in the centre,
-and tramming (QGL/ZTA) and Z on the lower diagonals. Move uses a four-way XY
-pad and a separate vertical Z rocker. These layouts build in firmware; real
-panel captures are shown below. Home and Move touch controls have been checked
-on the panel; swipe checks are still pending.
-See [the corner keys](#the-corner-keys) for how hardware can take over a
-position. The light rings on Home indicate axes already homed; QGL has no
-homed-state ring. A visible shared binding at NE or SE brings both Z controls
-closer together along the right edge.
+![Unarmed E-stop page](docs/img/estop.png)
 
-![Home page with QGL available](docs/img/home.png) ![Move page](docs/img/move.png) ![Move with FEED at NE and RETRACT at SE](docs/img/move-shared.png)
+The Home page places X and Y on the upper diagonals, home-all in the centre,
+and tramming (QGL/ZTA) and Z on the lower diagonals. Unhomed actions are white
+on black; homed actions fill with the machine accent and automatically use black
+or white symbols for contrast. QGL/ZTA stays neutral until Klipper reports its
+adjustment as applied, then gains the same accent fill. Move uses a four-way XY pad and a separate vertical Z rocker. These
+layouts build in firmware; real panel captures are shown below. Home and Move
+touch controls have been checked on the panel; swipe checks are still pending.
+See [the corner keys](#the-corner-keys) for how hardware can take over a
+position. A visible shared binding at NE or SE brings both Z controls closer
+together along the right edge.
+
+![Home before homing](docs/img/home-unhomed.png) ![Home with axes homed](docs/img/home.png) ![Home with QGL applied](docs/img/home-applied.png) ![Home with a red machine accent](docs/img/home-red.png)
+
+![Move page](docs/img/move.png) ![Move with FEED at NE and RETRACT at SE](docs/img/move-shared.png)
 
 ## Scope, and what is finished
 
@@ -648,19 +655,34 @@ serial link — the display has no network, no filesystem and no second port.
 
 ```bash
 python scripts/screenshot.py COM5 --drive printing -o docs/img/printing.png
+python scripts/screenshot.py COM5 --drive init -o docs/img/init.png  # clear old errors; show the spinner
+python scripts/screenshot.py COM5 --drive shutdown --settle 30 -o docs/img/shutdown.png
 python scripts/screenshot.py COM5 -o now.png     # whatever is on screen now
 python scripts/screenshot.py COM5 --drive idle --page home --tram qgl -o home.png
+python scripts/screenshot.py COM5 --drive idle --page home --tram qgl --unhomed -o home-unhomed.png
+python scripts/screenshot.py COM5 --drive idle --page home --tram qgl --tram-applied -o home-applied.png
+python scripts/screenshot.py COM5 --drive idle --page home --tram qgl --machine-color FF0000 -o home-red.png
 python scripts/screenshot.py COM5 --drive idle --page move --slotless-buttons -o move.png
 python scripts/screenshot.py COM5 --drive idle --page move --shared-buttons -o move-shared.png
+python scripts/screenshot.py COM5 --drive idle --page tool --settle 30 -o docs/img/estop.png
 ```
 
 About fourteen seconds a frame. `--drive` feeds the display a state first, so a
 documentation shot does not depend on catching the printer in the right mood.
+`--drive init` clears a retained error message before driving the disconnected
+state; `--drive waiting` keeps the shutdown-message variant shown above.
 `--page` makes one idle page the complete configured page list, so it is also
 the landing page; no swipe or screenshot-only firmware command is involved.
 `--slotless-buttons` adds FEED/RETRACT event observers without claiming any
 screen slots; `--shared-buttons` places the same demo observers at NE/SE. This
 captures both Move layouts without Klipper or physical switches.
+`--unhomed` clears the demo state’s homed flags; `--tram-applied` marks the
+selected QGL/ZTA adjustment complete. `--machine-color` temporarily
+overrides the demo config’s accent, letting Home’s automatic symbol contrast be
+reviewed with a light or dark colour.
+For E-stop, swipe up on the display during the 30-second settle window and
+leave the button untouched. It is deliberately outside `pages:`, so this
+capture needs a physical swipe and is not part of `--all`.
 See [docs/protocol.md](docs/protocol.md) for how it works.
 
 ### Checks

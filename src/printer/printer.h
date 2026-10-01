@@ -23,7 +23,8 @@ namespace printer {
 //    chamber and its temperature is the one nobody else reports.
 // 6: config carries fixed button bindings and BUTTON_EVENT forwards a named
 //    host event by CRC-scoped record index.
-static const unsigned int kProtoVersion = 6;
+// 7: state includes the selected QGL/Z-tilt adjustment's applied status.
+static const unsigned int kProtoVersion = 7;
 
 // Every frame is
 //
@@ -78,10 +79,9 @@ static const int32_t kUnknown = -1;
 // Fields after it arrive on other frames and are held here so the UI has one
 // place to read the machine from.
 //
-// Field order and padding are the wire format. The seven flags and the
-// one-byte tram type fill the gap after `status` exactly, which is what keeps
-// the int32 block 4-byte aligned; adding a flag would consume that padding
-// rather than shifting everything below it.
+// Field order and padding are the wire format. Eight flags follow status;
+// tram_type then occupies one byte, followed by three padding bytes before
+// the int32 block. The host sends those as zero.
 struct State {
   Status status = Status::kDisconnected;
 
@@ -97,6 +97,8 @@ struct State {
   bool used = true;
   //: This tool is the one currently mounted.
   bool active = false;
+  //: The selected QGL/Z-tilt adjustment has completed successfully.
+  bool tram_applied = false;
 
   TramType tram_type = TramType::kNone;
 
@@ -159,7 +161,7 @@ struct State {
 
 //: Length of the kState payload. Everything in State from `message` on arrives
 //: some other way and must not be read off a state frame.
-static const unsigned int kStateWireSize = 80;
+static const unsigned int kStateWireSize = 84;
 
 // The wire format is this struct's memory layout - recv_task memcpys straight
 // into it - so a compiler that padded differently than the host packs would

@@ -75,7 +75,7 @@ namespace ui
       // breathing, which is the smaller loss.
       _spinner = lv_arc_create(scr);
       lv_obj_set_size(_spinner, 56, 56);
-      lv_obj_align(_spinner, LV_ALIGN_CENTER, 0, -8);
+      lv_obj_align(_spinner, LV_ALIGN_CENTER, 0, 0);
       lv_obj_remove_style(_spinner, nullptr, LV_PART_KNOB);
       lv_obj_remove_flag(_spinner, LV_OBJ_FLAG_CLICKABLE);
       lv_arc_set_bg_angles(_spinner, 0, 360);
@@ -108,7 +108,7 @@ namespace ui
       lv_obj_set_width(_message, 170);
       lv_label_set_text(_message, "");
       lv_obj_set_style_text_align(_message, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-      lv_obj_align(_message, LV_ALIGN_CENTER, 0, -8);
+      lv_obj_align(_message, LV_ALIGN_CENTER, 0, 0);
       lv_obj_add_flag(_message, LV_OBJ_FLAG_HIDDEN);
 
       lv_obj_t *state = lv_label_create(scr);

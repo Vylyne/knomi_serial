@@ -1,6 +1,6 @@
 # Knomi V2 hardware notes
 
-Read off the BTT Knomi V2.0 schematic (rev V2.2, 23 Oct 2023). Every net listed as *in use* below cross-checks against `src/board_conf.h`, GPIO12 is the backlight, 14/18/20/19/21 are the LCD, 16/17 are the touch panel.
+Read off the BTT Knomi V2.0 schematic (rev V2.2, 23 Oct 2023). Every net listed as *in use* below cross-checks against `src/knomi_v2.h`, GPIO12 is the backlight, 14/18/20/19/21 are the LCD, 16/17 are the touch panel.
 
 ## The parts that matter
 

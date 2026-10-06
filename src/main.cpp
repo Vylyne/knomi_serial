@@ -21,7 +21,7 @@ void setup() {
   Serial.setTxBufferSize(SERIAL_TX_BUFFER);
   Serial.begin(SERIAL_BAUD_RATE);
   Serial.setTimeout(SERIAL_TIMEOUT);
-  Wire.begin(I2C0_SDA_PIN, I2C0_SCL_PIN, I2C0_SPEED);
+  Wire.begin(I2C0_SDA, I2C0_SCL, I2C0_FREQ);
 
   // Compiled out unless built with the knomi_i2cscan env. Deliberately here,
   // before any task exists, so nothing else can be using Wire.

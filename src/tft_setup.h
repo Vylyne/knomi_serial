@@ -1,26 +1,31 @@
 #ifndef TFT_SETUP_H
 #define TFT_SETUP_H
 
-#include "board_conf.h"
+// TFT_eSPI user setup for Knomi V2. See docs/hardware.md.
 
 #define USER_SETUP_LOADED
-
 #define DISABLE_ALL_LIBRARY_WARNINGS
 
-#define USER_SETUP_ID 46
-
+// Driver and display dimensions
 #define GC9A01_DRIVER
-#define TFT_WIDTH  240
+#define TFT_WIDTH 240
 #define TFT_HEIGHT 240
 
-#define TFT_MOSI GC9A01_MOSI_PIN
-#define TFT_SCLK GC9A01_SCLK_PIN
-#define TFT_CS   GC9A01_CS_PIN
-#define TFT_DC   GC9A01_DC_PIN
-#define TFT_RST  GC9A01_RST_PIN
+// Include board pin definitions
+#include "knomi_v2.h"
+
+// Panel SPI pins from knomi_v2.h
+#define TFT_MOSI LCD_MOSI
+#define TFT_SCLK LCD_SCLK
+#define TFT_CS LCD_CS
+#define TFT_DC LCD_DC
+#define TFT_RST LCD_RST
+
+// Display configuration
 #define TFT_INVERSION_ON
 
-#define SPI_FREQUENCY  80000000
-#define SPI_READ_FREQUENCY  5000000
+// SPI frequencies
+#define SPI_FREQUENCY 80000000
+#define SPI_READ_FREQUENCY 5000000
 
 #endif

@@ -30,7 +30,7 @@ void _flush_display(lv_display_t *display, const lv_area_t *area, uint8_t *color
 void _read_touchscreen(lv_indev_t *indev, lv_indev_data_t *data);
 
 void init() {
-  pinMode(LCD_BL_PIN, OUTPUT);
+  pinMode(BACKLIGHT, OUTPUT);
 
   _tft = new TFT_eSPI();
   _tft->init();
@@ -71,23 +71,23 @@ void set_backlight(uint8_t target) {
   }
 
   if (target == 0) {
-    digitalWrite(LCD_BL_PIN, LOW);
+    digitalWrite(BACKLIGHT, LOW);
     delay(3);
     current = 0;
     return;
   }
 
   if (current == 0) {
-    digitalWrite(LCD_BL_PIN, HIGH);
+    digitalWrite(BACKLIGHT, HIGH);
     delayMicroseconds(25);
     current = 16;
   }
 
   uint8_t cycles = (current >= target) ? current - target : current + 16 - target;
   for (uint8_t i = 0; i < cycles; i ++) {
-    digitalWrite(LCD_BL_PIN, LOW);
+    digitalWrite(BACKLIGHT, LOW);
     delayMicroseconds(1);
-    digitalWrite(LCD_BL_PIN, HIGH);
+    digitalWrite(BACKLIGHT, HIGH);
     delayMicroseconds(1);
   }
 

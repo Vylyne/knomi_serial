@@ -27,15 +27,15 @@ namespace display
     void init()
     {
       Wire.begin();
-      pinMode(CST816S_IRQ_PIN, INPUT);
-      pinMode(CST816S_RST_PIN, OUTPUT);
+      pinMode(TP_INT, INPUT);
+      pinMode(TP_RST, OUTPUT);
 
-      digitalWrite(CST816S_RST_PIN, LOW);
+      digitalWrite(TP_RST, LOW);
       delay(10);
-      digitalWrite(CST816S_RST_PIN, HIGH);
+      digitalWrite(TP_RST, HIGH);
       delay(50);
 
-      attachInterrupt(CST816S_IRQ_PIN, _handle_irq, FALLING);
+      attachInterrupt(TP_INT, _handle_irq, FALLING);
 
       _write_i2c(kReportRate, 1);
       _write_i2c(kReportMode, 0x60);
@@ -87,20 +87,20 @@ namespace display
 
     bool _read_i2c(uint8_t reg, uint8_t *data, size_t len)
     {
-      Wire.beginTransmission(CST816S_ADDR);
+      Wire.beginTransmission(TP_I2C_ADDR);
       Wire.write(reg);
       if (Wire.endTransmission(true))
       {
         return false;
       }
-      uint8_t recv = Wire.requestFrom(CST816S_ADDR, static_cast<int>(len), 1);
+      uint8_t recv = Wire.requestFrom(TP_I2C_ADDR, static_cast<int>(len), 1);
       Wire.readBytes(data, recv);
       return true;
     }
 
     void _write_i2c(uint8_t reg, uint8_t data)
     {
-      Wire.beginTransmission(CST816S_ADDR);
+      Wire.beginTransmission(TP_I2C_ADDR);
       Wire.write(reg);
       Wire.write(data);
       Wire.endTransmission(true);

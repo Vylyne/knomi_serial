@@ -35,7 +35,7 @@ inline void i2c_scan() {
   // scripts/simulate.py prints it, rather than it being visible only to
   // whoever happens to have a serial monitor open.
   Serial.printf(
-      "KNOMI_CMD:I2C:scan sda=%d scl=%d\n", I2C0_SDA_PIN, I2C0_SCL_PIN);
+      "KNOMI_CMD:I2C:scan sda=%d scl=%d\n", I2C0_SDA, I2C0_SCL);
 
   int found = 0;
   for (uint8_t addr = 0x08; addr <= 0x77; addr++) {

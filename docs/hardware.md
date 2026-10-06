@@ -1,6 +1,6 @@
 # Knomi V2 hardware notes
 
-Read off the BTT Knomi V2.0 schematic (rev V2.2, 23 Oct 2023). Every net listed as *in use* below cross-checks against `src/knomi_v2.h`, GPIO12 is the backlight, 14/18/20/19/21 are the LCD, 16/17 are the touch panel.
+Read off the [BTT Knomi V2.0 schematic](https://github.com/bigtreetech/KNOMI/blob/master/KNOMI2/Hardware/BIGTREETECH%20Knomi%20V2.0-SCH.pdf) (rev V2.2, 23 Oct 2023). Every net listed as *in use* below cross-checks against `src/knomi_v2.h`, GPIO12 is the backlight, 14/18/20/19/21 are the LCD, 16/17 are the touch panel.
 
 ## The parts that matter
 
@@ -13,6 +13,7 @@ Read off the BTT Knomi V2.0 schematic (rev V2.2, 23 Oct 2023). Every net listed 
 | U7 | GD25Q128E | 128 Mbit = 16 MB flash. |
 | U10 | FPC 24-pin 0.5 mm | Camera connector, labelled `ov2640`. Unpopulated. |
 | U13 | AW9364 | Backlight LED driver. |
+| P2 | MX1.25 2-pin | External power input, labelled `batter`. |
 
 ## Pin map
 
@@ -65,6 +66,80 @@ being about 2.48 V, but that is a 320 mV margin rather than a comfortable one.
 `GPIO33`–`GPIO37` are marked no-connect on the schematic because the S3**R8**'s
 octal PSRAM consumes them internally. They are not free pins; they are spoken for
 inside the package.
+
+## Connectors
+
+Pin numbers are the schematic's. The schematic does not show which physical end
+of a connector is pin 1, so confirm it with a meter before wiring — all three
+have a ground pin that is easy to find by continuity.
+
+### U6 — external I²C (MX1.25, 4-pin)
+
+| Pin | Net | Notes |
+| --- | --- | --- |
+| 1 | `VDD33` | 3.3 V out. C34 decouples it at the connector. |
+| 2 | `GND` | — |
+| 3 | `SCL0` | GPIO1. |
+| 4 | `SDA0` | GPIO2. |
+| 5, 6 | `GND` | Mounting tabs. |
+
+Both lines are pulled to 3.3 V twice: 4.7K drawn with the connector (R23/R24)
+and 10K drawn with the accelerometer (R44/R45), about 3.2K in parallel if both
+pairs are fitted. A
+peripheral that brings its own pullups lowers that further.
+
+### U10 — camera FPC (24-pin, 0.5 mm)
+
+The standard OV2640 module pinout. *Label* is the connector's name for the pin;
+*net* is what the board wires it to.
+
+| Pin | Label | Net | GPIO | Notes |
+| --- | --- | --- | --- | --- |
+| 1 | `NC` | — | — | Not connected. |
+| 2 | `GND` | `GND` | — | — |
+| 3 | `SDA` | `SDA1` | 4 | R31, 2K to `VDD28`. |
+| 4 | `AVDD` | `AVDD28` | — | `VDD28` through R59 (0R). |
+| 5 | `SCL` | `SCL1` | 3 | R30, 2K to `VDD28`. Strapping pin — see above. |
+| 6 | `RESET` | `RESET1` | 11 | — |
+| 7 | `VS` | `VSYNC` | 15 | — |
+| 8 | `PWDN` | `PWDN` | 10 | R55, 100K to GND. |
+| 9 | `HS` | `HREF` | 9 | R56, 20R in series. |
+| 10 | `DVDD12` | `VDD12` | — | U12's output. |
+| 11 | `DOVDD28` | `VDD28` | — | U11's output, 2.8 V. |
+| 12 | `D9` | `D9` | 8 | — |
+| 13 | `MCLK` | `MCLK` | 7 | R57, 20R in series. |
+| 14 | `D8` | `D8` | 6 | — |
+| 15 | `GND1` | `GND` | — | — |
+| 16 | `D7` | `D7` | 5 | — |
+| 17 | `PCLK` | `PCLK` | 48 | R58, 20R in series. |
+| 18 | `D6` | `D6` | 47 | — |
+| 19 | `D2` | `D2` | 38 | — |
+| 20 | `D5` | `D5` | 39 | — |
+| 21 | `D3` | `D3` | 40 | — |
+| 22 | `D4` | `D4` | 41 | — |
+| 23 | `D1` | `D1` | 42 | — |
+| 24 | `D0` | `D0` | 45 | Strapping pin — see above. |
+| 25, 26 | — | `GND` | — | Shell. |
+
+The schematic symbol draws odd pins on one side and even on the other, but the
+ribbon is a single row. The four preferred button pins are not adjacent on it:
+`HREF` is 9, `D9` is 12, `D8` is 14 and `D7` is 16. Ground is on 2 and 15.
+
+`VDD12` is named for 1.2 V but U12 is marked PW6566B**15**, which suggests
+1.5 V. Meter it before powering anything from pin 10.
+
+### P2 — power input (MX1.25, 2-pin)
+
+| Pin | Net | Notes |
+| --- | --- | --- |
+| 1 | `VIN` | 2.5–5.5 V, per the schematic. **Not a 12 V or 24 V input.** |
+| 2 | `GND` | — |
+| 3, 4 | `GND` | Mounting tabs. |
+
+`VIN` and USB `VBUS` each pass through a Schottky (V1 and V2, DSS24) into the
+same node, then a 2 A fuse and the PW2052 buck that makes `VDD33`. The diodes
+mean either source can power the board and neither back-feeds the other — the
+display can be fed from P2 while USB stays plugged in for serial.
 
 ## The 8 MB of PSRAM
 

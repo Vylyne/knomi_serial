@@ -8,7 +8,7 @@ Read off the BTT Knomi V2.0 schematic (rev V2.2, 23 Oct 2023). Every net listed 
 | --- | --- | --- |
 | U1 | ESP32-S3**R8** | The `R8` is 8 MB in-package PSRAM. Nearly all idle — see below. |
 | U3 | LH128R-IC15-TP | 240×240 round GC9A01 panel with capacitive touch. |
-| U5 | CH340K | USB-to-UART. The only serial path — see below. |
+| U5 | CH340K | USB-to-UART, enumerating as `1a86:7522`. The only serial path — see below. |
 | U6 | MX1.25 4-pin | External I²C port. Pullups fitted. |
 | U7 | GD25Q128E | 128 Mbit = 16 MB flash. |
 | U10 | FPC 24-pin 0.5 mm | Camera connector, labelled `ov2640`. Unpopulated. |
@@ -97,8 +97,8 @@ printing screen with its wave running costs about 17%.
 
 **Native USB is physically impossible on this board.** GPIO19 and GPIO20 are the
 ESP32-S3's USB D− and D+, and the panel uses both for D/C and chip select. That
-is why there is a CH340K, why `board_upload.wait_for_upload_port = no` is
-required — the CH340 never leaves the bus, so no new port appears after a reset —
+is why there is a CH340K, why `boards/knomi.json` turns `wait_for_upload_port`
+off — the CH340 never leaves the bus, so no new port appears after a reset —
 and why USB serial was removed from this firmware earlier. It was never a
 configuration mistake; the pins are gone.
 

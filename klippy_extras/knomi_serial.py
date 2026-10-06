@@ -259,9 +259,12 @@ def install_version_notice(wanted, stamped):
             f"Run ./install.sh in {where} to bring it up to date.")
 
 
-#: USB vendor ids worth listening to. 1A86 is the CH340 on the Knomi V2; 303A is
-#: Espressif's own, for boards whose ESP32 is the USB device directly.
-_USB_VENDORS = (0x1A86, 0x303A)
+#: USB ids worth listening to, as (vendor, product). 1A86:7522 is the CH340K on
+#: the Knomi V2, and the only thing that board can enumerate as: the ESP32-S3's
+#: own USB pins drive the panel. The product id is not decoration - 1A86:7523 is
+#: the CH340 on plenty of printer mainboards, and that port is not ours to open.
+#: boards/knomi.json carries the same pair for PlatformIO.
+_USB_IDS = ((0x1A86, 0x7522),)
 
 #: How long to listen on a candidate port. The device announces itself every two
 #: seconds unprompted, so this is not a timeout on a question - it is a wait for
@@ -275,7 +278,7 @@ def candidate_ports(skip=()):
     return sorted(
         port.device
         for port in serial.tools.list_ports.comports()
-        if port.vid in _USB_VENDORS and port.device not in skip
+        if (port.vid, port.pid) in _USB_IDS and port.device not in skip
     )
 
 

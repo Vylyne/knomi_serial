@@ -205,6 +205,62 @@ def test_report_id_ignores_lines_that_are_not_reports():
     check("no id field", k.report_id(old), None)
 
 
+def candidates(ports, skip=()):
+    """Run candidate_ports() against a fixed enumeration of (path, vid, pid)."""
+
+    class Listed:
+        def __init__(self, device, vid, pid):
+            self.device, self.vid, self.pid = device, vid, pid
+
+    real = k.serial.tools.list_ports.comports
+    k.serial.tools.list_ports.comports = lambda: [Listed(*p) for p in ports]
+    try:
+        return k.candidate_ports(skip)
+    finally:
+        k.serial.tools.list_ports.comports = real
+
+
+def test_only_the_displays_own_bridge_is_a_candidate():
+    """Opening a port resets what is on it, so the wrong one is not harmless.
+
+    1A86:7523 is the CH340 on plenty of printer mainboards and shares a vendor
+    with the display. 303A cannot be a Knomi V2 at all: its native USB pins
+    drive the panel.
+    """
+    found = candidates([
+        ("/dev/ttyUSB0", 0x1A86, 0x7522),
+        ("/dev/ttyUSB1", 0x1A86, 0x7523),
+        ("/dev/ttyACM0", 0x303A, 0x1001),
+        ("/dev/ttyACM1", 0x1D50, 0x614E),
+        ("/dev/ttyS0", None, None),
+    ])
+    check("only the CH340K", found, ["/dev/ttyUSB0"])
+
+
+def test_candidates_leave_out_the_ports_already_spoken_for():
+    found = candidates([
+        ("/dev/ttyUSB1", 0x1A86, 0x7522),
+        ("/dev/ttyUSB0", 0x1A86, 0x7522),
+    ], skip=("/dev/ttyUSB0",))
+    check("the other one", found, ["/dev/ttyUSB1"])
+
+
+def test_candidate_ids_are_the_ones_the_board_manifest_carries():
+    """Two lists of the same fact, read by different tools.
+
+    PlatformIO picks an upload port from boards/knomi.json and so does anything
+    that resolves ids through the build config. A flashing tool filtering on
+    one list while discovery filters on the other would disagree about which
+    ports are displays.
+    """
+    import json
+
+    with open(os.path.join(_ROOT, "boards", "knomi.json")) as f:
+        hwids = json.load(f)["build"]["hwids"]
+    check("same pairs", sorted(k._USB_IDS),
+          sorted((int(vid, 16), int(pid, 16)) for vid, pid in hwids))
+
+
 def main():
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

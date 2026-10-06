@@ -132,6 +132,17 @@ About a second — displays broadcast every two seconds unprompted, so this
 listens rather than asking. `python3 scripts/discover.py` does the same thing
 for a human at a terminal.
 
+What it listens to is `candidate_ports()`: every port enumerating as
+`1a86:7522`, the CH340K these boards carry. Nothing else is opened — not the
+`1a86:7523` CH340 on a printer mainboard, and not Espressif's `303a`, which a
+Knomi V2 cannot present because its native USB pins drive the panel.
+`boards/knomi.json` lists the same pair under `build.hwids`, so a tool that
+resolves ids through the PlatformIO config arrives at the same ports, and
+`tests/test_discovery.py` fails if the two drift apart.
+
+That pair is a filter, not an identity. A CH340K on something else matches it
+too, which is why the id still has to be heard before anything is written.
+
 ## What this repo promises not to break
 
 `scripts/discover.py` is a human-facing tool and may change freely. The stable
@@ -145,7 +156,7 @@ stopped and a display half-written.
 | `discover_reports(ports=None, listen=<default>, skip=())` | all arguments optional; omit `listen` for the module's normal discovery window |
 | its return | `{id: {...}}`, keyed by the lowercase hardware id |
 | each entry | carries at least `port`, `fw`, `var` |
-| `candidate_ports(skip=())` | is there anything to look at |
+| `candidate_ports(skip=())` | the ports enumerating as `1a86:7522` — is there anything to look at |
 | `port_map(path=None)` | `{id: port}` from the watcher's file |
 | `python3-serial` | declared as a system dependency, so `import serial` works |
 
@@ -212,6 +223,10 @@ retrying works; stopping it removes the race.
 Flashing by identity means resolving id → port from one of the three sources
 above **at flash time**, not from a remembered path. A remembered path is the
 thing this whole scheme exists to avoid.
+
+Always pass `--upload-port`. Left to itself PlatformIO picks a port matching
+`build.hwids`, and with more than one display attached that is whichever it
+finds first.
 
 ## Afterwards
 

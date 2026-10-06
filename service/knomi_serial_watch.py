@@ -59,7 +59,7 @@ DEFAULT_PATH = os.path.expanduser("~/printer_data/knomi/devices.json")
 LISTEN = 5.0
 
 #: A port that did not identify itself is not asked again for this long. It is
-#: most likely a CH340 that is not a display at all - something else on the
+#: most likely a CH340K that is not a display at all - something else on the
 #: printer - and retrying it every second would mean holding a stranger's serial
 #: port open forever.
 RETRY_UNKNOWN = 120.0
@@ -274,13 +274,10 @@ class PortEvents:
         # Filtering before start() installs it in the kernel, so a boot's worth
         # of unrelated uevents never reaches this process at all.
         #
-        # The whole tty subsystem rather than ttyUSB, on two counts. The filter
-        # matches SUBSYSTEM and DEVTYPE, and tty devices carry no DEVTYPE, so
-        # there is nothing there to narrow with - it would have to be a check on
-        # the device node after the wakeup, which saves the tick and not the
-        # wake. And it would be wrong: a 303A board is the ESP32 as the USB
-        # device itself, which enumerates as ttyACM rather than ttyUSB, so
-        # matching on ttyUSB would quietly stop noticing half of _USB_VENDORS.
+        # The whole tty subsystem rather than ttyUSB. The filter matches
+        # SUBSYSTEM and DEVTYPE, and tty devices carry no DEVTYPE, so there is
+        # nothing there to narrow with - it would have to be a check on the
+        # device node after the wakeup, which saves the tick and not the wake.
         #
         # The cost of a tty event that is not ours is one tick - a sysfs walk
         # that finds nothing new. That is what the old loop paid every second.

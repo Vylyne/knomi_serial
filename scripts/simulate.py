@@ -14,6 +14,12 @@ cannot be tested at all.
     python scripts/simulate.py COM5
     python scripts/simulate.py COM5 --progress 54 --color FFA7C4 --type ABS
     python scripts/simulate.py COM5 --duration 30 --cycle-colours
+    python scripts/simulate.py COM5 --button nw:9:nw --button d6:47
+
+`--button NAME:GPIO[:SLOT]` binds a wired switch the way a printer.cfg
+`button_NAME:` would, and prints every press and release the display reports,
+with how long it was held. A pin bound with no slot draws nothing and claims no
+corner, which suits a control input that should never fire.
 
 With no pinned values it loops a whole print: cold, heating, printing, finished.
 Pin anything and that value stops moving, so `--progress 54` parks the fill at
@@ -74,10 +80,61 @@ DURATIONS = {
 MOVE_STEP = {"X": 10.0, "Y": 10.0, "Z": 10.0}
 
 
+class _BenchConfig:
+    """Just enough of Klipper's config object for the module's button parser.
+
+    Going through _parse_buttons means a pin or slot printer.cfg would refuse is
+    refused here too, and the records on the wire are the ones Klipper would send.
+    """
+
+    def __init__(self, options):
+        self._options = options
+
+    def get_prefix_options(self, prefix):
+        return [name for name in self._options if name.startswith(prefix)]
+
+    def get(self, option, default=None):
+        return self._options.get(option, default)
+
+    @staticmethod
+    def error(message):
+        return ValueError(message)
+
+
+def bench_buttons(specs):
+    """--button NAME:GPIO[:SLOT] values as the module's ButtonBindings.
+
+    Every binding names a press and a release macro, so the display reports both
+    edges - a bare macro would send the release alone. The macro names never
+    leave the host, so what they are called does not matter.
+    """
+    options = {}
+    for spec in specs:
+        parts = spec.split(":")
+        if len(parts) not in (2, 3) or not parts[0].strip():
+            raise ValueError(f"--button '{spec}' must be NAME:GPIO or NAME:GPIO:SLOT")
+        name, pin = parts[0].strip(), parts[1].strip()
+        slot = parts[2].strip() if len(parts) == 3 else "none"
+        option = f"button_{name}"
+        if option in options:
+            raise ValueError(f"--button '{spec}' repeats the name '{name}'")
+        lines = [
+            "source=gpio",
+            f"pin={pin}",
+            f"slot={slot}",
+            "press_resolver=gcode_macro BENCH_PRESS",
+            "release_resolver=gcode_macro BENCH_RELEASE",
+        ]
+        if slot.lower() != "none":
+            lines.append(f"legend={name[:4].upper()}")
+        options[option] = "\n".join(lines)
+    return k._parse_buttons(_BenchConfig(options), "simulate", 0)
+
+
 class Sim:
     """The printer the display thinks it is talking to."""
 
-    def __init__(self, args):
+    def __init__(self, args, buttons=()):
         self.args = args
         self.clock = 0.0
         self.paused = False
@@ -100,6 +157,7 @@ class Sim:
                 | k._HAS_BRIGHTNESS
                 | k._HAS_DIM_BRIGHTNESS
                 | k._HAS_GCODES
+                | (k._HAS_BUTTONS if buttons else 0)
             ),
             color_machine=int(args.machine_color, 16),
             color_filament_unknown=0x5A5A5A,
@@ -107,10 +165,15 @@ class Sim:
             sleep_ms=int(args.sleep_time * 1000),
             brightness=8,
             dim_brightness=3,
+            buttons=tuple(buttons),
             gcodes=b"HOME\nQGL\nPURGE",
         )
         self.config_crc = zlib.crc32(k.config_payload(self.config))
         self.config_sends = 0
+
+        self.buttons = tuple(buttons)
+        self.held = {}
+        self.presses = {binding.name: 0 for binding in self.buttons}
 
     # -- time ----------------------------------------------------------
 
@@ -158,6 +221,46 @@ class Sim:
             return
 
         self.note(f"unrecognised: {body.decode('utf-8', 'replace')}")
+
+    def button(self, payload):
+        """A KNOMI_CMD:BUTTON edge, minus its prefix: <crc>:<index>:<P|R>.
+
+        Checked the way the module checks it, then reported rather than run. An
+        edge for another config is the device acting on a stale index, which is
+        exactly what the CRC exists to catch, so it is called out.
+        """
+        try:
+            crc_hex, index_text, edge = payload.decode("ascii").split(":")
+            crc, index = int(crc_hex, 16), int(index_text)
+        except ValueError:
+            self.note(f"bad button edge: {payload!r}")
+            return
+        if crc != self.config_crc:
+            self.note(f"button edge for config {crc:08X}, not {self.config_crc:08X} - dropped")
+            return
+        if not 0 <= index < len(self.buttons) or edge not in ("P", "R"):
+            self.note(f"bad button edge: {payload!r}")
+            return
+
+        binding = self.buttons[index]
+        label = f"button {binding.name} GPIO{binding.pin}"
+        now = time.time()
+        if edge == "P":
+            if binding.name in self.held:
+                self.note(f"{label} PRESS AGAIN without a release")
+            self.held[binding.name] = now
+            self.presses[binding.name] += 1
+            self.note(f"{label} press #{self.presses[binding.name]}")
+            return
+        since = self.held.pop(binding.name, None)
+        if since is None:
+            self.note(f"{label} RELEASE without a press")
+        elif now - since < _PERIOD:
+            # Both edges arrived in one read of the uplink, which happens once a
+            # loop, so this is the clock's resolution rather than a measurement.
+            self.note(f"{label} release, held under {_PERIOD:.1f}s")
+        else:
+            self.note(f"{label} release, held {now - since:.1f}s")
 
     def _gcode(self, gcode):
         upper = gcode.upper()
@@ -369,6 +472,8 @@ def drain(port, sim, seen):
             sim.note(f"CFG? -> sent config, crc {sim.config_crc:08X}")
         elif body.startswith(b"I2C:"):
             sim.note("i2c: " + body[4:].decode("utf-8", "replace"))
+        elif body.startswith(b"BUTTON:"):
+            sim.button(body[len(b"BUTTON:"):])
         else:
             sim.handle(body)
 
@@ -434,9 +539,17 @@ def main():
                    help="this tool is not in the job - the screen should sleep")
     p.add_argument("--no-active", dest="active", action="store_false",
                    help="this tool is not the mounted one")
+    p.add_argument("--button", action="append", default=[], metavar="NAME:GPIO[:SLOT]",
+                   help="bind a wired switch, e.g. nw:9:nw; repeat for more. SLOT is "
+                        "nw, ne, sw, se or none (the default)")
     p.set_defaults(used=True, active=True)
 
     args = p.parse_args()
+
+    try:
+        buttons = bench_buttons(args.button)
+    except ValueError as e:
+        return p.error(str(e))
 
     if args.list:
         list_ports()
@@ -464,7 +577,9 @@ def main():
         sys.exit(f"Could not open {args.port}: {e}")
 
     print(f"Driving {args.port} at {args.baud}. Buttons on the screen work. Ctrl-C to stop.")
-    sim = Sim(args)
+    sim = Sim(args, buttons)
+    for binding in buttons:
+        print(f"  button {binding.name}: GPIO{binding.pin}, slot {binding.slot.name.lower()}")
     seen = {"buf": b""}
     last = time.time()
 
@@ -518,6 +633,9 @@ def main():
             port.close()
         except Exception:
             pass
+    if sim.buttons:
+        print("  presses: " + ", ".join(
+            f"{name} {count}" for name, count in sim.presses.items()))
     print("Stopped.")
     return 0
 

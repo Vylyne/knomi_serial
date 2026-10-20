@@ -26,9 +26,29 @@ protocol described in the README; they do not introduce a new API.
   button and contrasting label. Direct captures intermittently omitted static
   labels at short settle times; the linked 30-second-settle capture is complete.
   No live Klipper restart was exercised.
-- A wired GPIO switch, live shared-button routing, swipes, and end-to-end
-  command counts have not been verified. A successful build is not a switch
-  test, and a touch hit is not proof that Klipper ran exactly one command.
+- Wired GPIO switches were exercised on COM5 on 2026-10-19/20 with
+  `scripts/simulate.py --button`, against display `19aa44` running
+  `0.6.0+20.g69744c3.dirty` (`69744c3` plus the uncommitted board-variant
+  change). Four active-low switches on GPIO9/8/6/5 were bound to NW/SW/NE/SE,
+  and GPIO47 and GPIO38, with no switch, were bound slotless as controls. All
+  six pins carry external 4.7 kΩ pull-ups to U6's 3.3 V, so idle HIGH on this
+  rig comes from those resistors, not from the firmware's internal pull-up. Every actuation produced exactly one press and one
+  release, matching the operator's count, including a tap shorter than the
+  simulator's 0.1 s read loop. The controls never fired, the corner legends
+  showed, and tapping a claimed corner on the glass did nothing. After the
+  config was replaced without SE (CRC `BD675C3A` to `695472C1`), the SE switch
+  produced nothing and the SE corner's touch action (`UNLOAD_FILAMENT`) came
+  back. A switch held through a config replacement (GPIO9 rebound from NW to SE,
+  CRC `7387E5F2`) produced no release or stale edge from the old config. The
+  new binding reported a press for the already-held switch under the new CRC;
+  the operator accepts that as intended.
+- Still not shown for wired GPIO: the 20 ms debounce threshold itself rather than ordinary actuations, the
+  internal pull-up being applied and later removed (the external resistors mask
+  both), and a macro run by Klipper rather than an edge reported by the
+  simulator.
+- Live shared-button routing, swipes, and end-to-end command counts have not
+  been verified. A successful build is not a switch test, and a touch hit is not
+  proof that Klipper ran exactly one command.
 
 ## Software gate for changes
 

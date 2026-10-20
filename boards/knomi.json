@@ -6,7 +6,6 @@
     },
     "core": "esp32",
     "extra_flags": [
-      "-DARDUINO_ADAFRUIT_FEATHER_ESP32S3",
       "-DARDUINO_RUNNING_CORE=1",
       "-DARDUINO_EVENT_RUNNING_CORE=1",
       "-DBOARD_HAS_PSRAM"
@@ -21,7 +20,8 @@
       ]
     ],
     "mcu": "esp32s3",
-    "variant": "adafruit_feather_esp32s3"
+    "variant": "knomi_v2",
+    "variants_dir": "variants"
   },
   "connectivity": [
     "wifi"

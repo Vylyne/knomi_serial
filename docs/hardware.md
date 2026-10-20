@@ -2,6 +2,13 @@
 
 Read off the [BTT Knomi V2.0 schematic](https://github.com/bigtreetech/KNOMI/blob/master/KNOMI2/Hardware/BIGTREETECH%20Knomi%20V2.0-SCH.pdf) (rev V2.2, 23 Oct 2023). Every net listed as *in use* below cross-checks against `src/knomi_v2.h`, GPIO12 is the backlight, 14/18/20/19/21 are the LCD, 16/17 are the touch panel.
 
+The Arduino core takes its default pins — a bare `Wire.begin()`, `Serial1` with
+no arguments — from `variants/knomi_v2/pins_arduino.h`, which names the same
+pins and has no `variant.cpp`, so nothing is driven before `setup()`. The board
+used to borrow Adafruit's Feather S3 variant, whose defaults put I²C on GPIO3/4
+and whose start-up code drove GPIO7 and GPIO21 high. `tests/test_variant.py`
+keeps the two headers in agreement.
+
 ## The parts that matter
 
 | Ref | Part | Notes |

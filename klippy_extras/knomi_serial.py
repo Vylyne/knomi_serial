@@ -9,6 +9,7 @@ things that are true of the machine rather than of a screen: which tools a job
 uses, and which tool is mounted right now.
 """
 
+import collections
 import dataclasses
 import enum
 import json
@@ -37,12 +38,18 @@ _FRAME_BUTTON_EVENT = 0x05
 _RECV_PERIOD = 0.1
 _SEND_PERIOD = 0.1
 
-#: How long a write may block before the device is treated as wedged. pyserial
-#: defaults to blocking forever, and this runs on Klipper's reactor thread -
-#: which is also the thread talking to the MCUs. A screen that stops draining
-#: its buffer would stall the whole reactor and surface as a timing error, with
-#: nothing pointing at the display.
-_WRITE_TIMEOUT = 0.2
+#: How long a display may take no data at all before it is treated as wedged.
+#: Writes never wait for the port: they go out non-blocking, and what the port
+#: will not take yet stays queued for the next tick. This runs on Klipper's
+#: reactor thread, which also feeds the MCUs their step queues. A write that
+#: waits - even the 0.2 s a blocking write timeout used to allow - can let a
+#: homing move's queue run dry and surface as "Timer too close", with nothing
+#: pointing at the display.
+_TX_STALL_TIMEOUT = 2.0
+
+#: Most bytes queued for one display. State frames replace each other, so this
+#: only fills when the port has stopped draining and other frames pile up.
+_TX_BACKLOG_LIMIT = 4096
 
 #: A port that failed is retried on this cadence rather than being abandoned
 #: until the next Klipper restart.
@@ -560,6 +567,80 @@ def encode_message(text):
     if isinstance(text, str):
         text = text.encode("utf-8")
     return encode_frame(_FRAME_MESSAGE, text[:_MESSAGE_MAX_LEN])
+
+
+class Outbox:
+    """Frames queued for one display, written without ever waiting on the port.
+
+    A frame that has started going out is always finished, so the device's
+    header scan never has to recover from a frame cut in half. A replaceable
+    frame - state - that has not started is replaced by the next one: the device
+    only wants the latest state, and sending stale ones first is how a slow port
+    falls further behind. Everything else - config, messages, button events -
+    keeps its place, because each says something the next does not.
+    """
+
+    def __init__(self, limit=_TX_BACKLOG_LIMIT):
+        self.limit = limit
+        self.frames = collections.deque()  # (replaceable, data)
+        self.offset = 0  # bytes of frames[0] already written
+        self.queued = 0  # bytes in frames, including what is already written
+        #: Frames discarded because the backlog passed the limit.
+        self.dropped = 0
+
+    def __len__(self):
+        """Bytes still to write."""
+        return self.queued - self.offset
+
+    def put(self, data, replaceable=False):
+        if replaceable:
+            self._remove(lambda frame: frame[0])
+        self.frames.append((replaceable, data))
+        self.queued += len(data)
+        while len(self) > self.limit and self._remove_oldest():
+            self.dropped += 1
+
+    def flush(self, write):
+        """Hand `write` as much as it will take; returns the bytes written.
+
+        `write` returns how many bytes it accepted, 0 when it would block. Any
+        exception it raises is left to the caller.
+        """
+        total = 0
+        while self.frames:
+            data = self.frames[0][1]
+            n = write(memoryview(data)[self.offset:])
+            if not n:
+                break
+            total += n
+            self.offset += n
+            if self.offset >= len(data):
+                self.frames.popleft()
+                self.queued -= len(data)
+                self.offset = 0
+        return total
+
+    def _started(self, index):
+        return index == 0 and self.offset > 0
+
+    def _remove(self, match):
+        kept = collections.deque()
+        for index, frame in enumerate(self.frames):
+            if match(frame) and not self._started(index):
+                self.queued -= len(frame[1])
+            else:
+                kept.append(frame)
+        self.frames = kept
+
+    def _remove_oldest(self):
+        """Drop the oldest frame that has not started; False if there is none."""
+        index = 1 if self.offset else 0
+        if index >= len(self.frames):
+            return False
+        frame = self.frames[index]
+        del self.frames[index]
+        self.queued -= len(frame[1])
+        return True
 
 
 def _normalize_tool(value):
@@ -1737,6 +1818,8 @@ class Knomi_Serial:
         self.serial = None
         self.next_connect = 0
         self.pending_cmd = b""
+        self.outbox = Outbox()
+        self.tx_stalled_since = None
 
         self.module_version = _module_version()
         self.device_report = {}
@@ -2081,7 +2164,6 @@ class Knomi_Serial:
             self.serial = serial.Serial(
                 path,
                 _BAUD_RATE,
-                write_timeout=_WRITE_TIMEOUT,
                 # TIOCEXCL on POSIX; a no-op on Windows, where ports are
                 # exclusive already. A skip list is a promise the code makes to
                 # itself and can forget to keep - this makes the mistake
@@ -2089,6 +2171,11 @@ class Knomi_Serial:
                 # scripts/discover.py run cannot disturb a live print either.
                 exclusive=True,
             )
+            # Writes go straight to the descriptor and must never wait; see
+            # _TX_STALL_TIMEOUT.
+            os.set_blocking(self.serial.fileno(), False)
+            self.outbox = Outbox()
+            self.tx_stalled_since = None
             return True
         except serial.SerialException as e:
             logging.warning(f"{self.name}: Failed to connect on {path}: {e}")
@@ -2108,6 +2195,8 @@ class Knomi_Serial:
                 pass
         self.serial = None
         self.pending_cmd = b""
+        self.outbox = Outbox()
+        self.tx_stalled_since = None
 
     def _handle_ready(self):
         self.gcode = self.printer.lookup_object("gcode")
@@ -2190,21 +2279,29 @@ class Knomi_Serial:
         if not self.serial or not self.serial.is_open:
             return
 
+        # Everything waiting, in one read. This runs on the reactor thread, and a
+        # byte at a time cost two syscalls and a bytes copy per character.
         try:
-            while self.serial.in_waiting:
-                char = self.serial.read()
-                if char == b"\n":
-                    if self.pending_cmd.startswith(_CMD_PREFIX):
-                        self._process_cmd(self.pending_cmd[len(_CMD_PREFIX) :])
-                    self.pending_cmd = b""
-                elif len(self.pending_cmd) < _CMD_MAX_LEN:
-                    self.pending_cmd += char
-                else:
-                    # Line noise with no newline in sight; drop it rather than
-                    # growing the buffer without bound.
-                    self.pending_cmd = b""
+            waiting = self.serial.in_waiting
+            if not waiting:
+                return
+            data = self.serial.read(waiting)
         except serial.SerialException as e:
             self._drop(f"Read error: {e}")
+            return
+
+        *lines, self.pending_cmd = (self.pending_cmd + data).split(b"\n")
+        if len(self.pending_cmd) > _CMD_MAX_LEN:
+            # Line noise with no newline in sight; drop it rather than growing
+            # the buffer without bound.
+            self.pending_cmd = b""
+        for line in lines:
+            if len(line) <= _CMD_MAX_LEN and line.startswith(_CMD_PREFIX):
+                self._process_cmd(line[len(_CMD_PREFIX) :])
+            if self.serial is None:
+                # A report from the wrong display drops the port; whatever
+                # else it said is not ours to act on.
+                return
 
     # ------------------------------------------------------------------
     # the wire
@@ -2226,18 +2323,47 @@ class Knomi_Serial:
         )
 
     def _send_state(self, state):
-        self._write(encode_state(state))
+        # Replaceable: a state frame still waiting for the port is stale the
+        # moment the next one exists.
+        self._write(encode_state(state), replaceable=True)
 
-    def _write(self, data):
+    def _write(self, data, replaceable=False):
         if not self.serial or not self.serial.is_open:
             return
+        self.outbox.put(data, replaceable=replaceable)
+        self._flush()
 
+    def _flush(self):
+        """Give the port what it will take now, and never wait for the rest.
+
+        A screen that takes nothing at all for _TX_STALL_TIMEOUT is treated as
+        wedged and dropped, the way a write timeout used to - but without the
+        reactor sitting in the write while it decides.
+        """
         try:
-            self.serial.write(data)
-        except serial.SerialException as e:
-            # Covers SerialTimeoutException, which is what _WRITE_TIMEOUT
-            # produces when a screen stops draining its buffer.
-            self._drop(f"Lost connection: {e}")
+            written = self.outbox.flush(self._port_write)
+        except OSError as e:
+            self._drop(f"Lost connection: write failed: {e}")
+            return
+
+        if written or not self.outbox:
+            self.tx_stalled_since = None
+            return
+        now = self.reactor.monotonic()
+        if self.tx_stalled_since is None:
+            self.tx_stalled_since = now
+        elif now - self.tx_stalled_since >= _TX_STALL_TIMEOUT:
+            self._drop(
+                f"Lost connection: display took no data for "
+                f"{_TX_STALL_TIMEOUT:g}s"
+            )
+
+    def _port_write(self, data):
+        """One non-blocking write; 0 when the port's buffer is full."""
+        try:
+            return os.write(self.serial.fileno(), data)
+        except (BlockingIOError, InterruptedError):
+            return 0
 
     def _verify_identity(self, reported):
         """Check that the display on this port is the one we went looking for.
@@ -2349,6 +2475,10 @@ class Knomi_Serial:
         return {
             # Host side.
             "connected": self.serial is not None and self.serial.is_open,
+            # Bytes waiting for the port, and frames given up on because it
+            # stopped draining. Both stay at zero on a healthy link.
+            "tx_backlog": len(self.outbox),
+            "tx_dropped": self.outbox.dropped,
             "port": self.config_serial or self.resolved_port,
             "device_id": self.config_device_id,
             "reported_id": report.get("id"),

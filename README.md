@@ -588,6 +588,8 @@ and to the Moonraker API as `printer["knomi_serial T0_knomi"]` (or
 | Field | Description |
 | --- | --- |
 | `connected` | Host has the serial port open. |
+| `tx_backlog` | Bytes queued for the display that the port has not taken yet. Writes never block Klipper; a display that takes nothing for 2 seconds is dropped and reconnected. |
+| `tx_dropped` | Frames discarded because the backlog passed 4 KiB. Zero on a healthy link. |
 | `port` | Configured serial path. |
 | `module_version` | Version of this Klipper module. |
 | `protocol_version` | Wire format version this module speaks. |

@@ -42,10 +42,30 @@ protocol described in the README; they do not introduce a new API.
   CRC `7387E5F2`) produced no release or stale edge from the old config. The
   new binding reported a press for the already-held switch under the new CRC;
   the operator accepts that as intended.
-- Still not shown for wired GPIO: the 20 ms debounce threshold itself rather than ordinary actuations, the
-  internal pull-up being applied and later removed (the external resistors mask
-  both), and a macro run by Klipper rather than an edge reported by the
-  simulator.
+- The internal pull-up was metered on GPIO5 on 2026-10-21, on a breakout with
+  no external resistor and nothing else connected: about 3.3 V while
+  a binding named the pin, and about 0.18 V (floating) once the binding was
+  removed from the config.
+- Debounce was checked on GPIO5 (SE) on 2026-10-21 with a 12 MS/s logic
+  analyzer alongside `scripts/simulate.py`. The switch was wired normally
+  closed. Because the firmware has no inversion option, it read the switch at
+  rest (LOW) as pressed, and each operator actuation (HIGH) as a release. Over
+  11.3 s the pin showed 17,081 falling edges. Each of the 17 actuations
+  produced exactly one release. The first began before the simulator was
+  tracking a press, so it printed as an unmatched release. Every clean return
+  to rest produced exactly one press. Both matched the capture to within the
+  simulator's 0.1 s resolution. The firmware polls every 5 ms, so most of the
+  sub-microsecond spikes were never sampled. About 70 ms of contact chatter on
+  one return to rest (about 88% LOW) was followed by a clean 12.2 ms HIGH, then
+  a steady LOW. That whole sequence produced one press and no release. Neither a
+  1.5 ms LOW during an actuation nor a 1.6 ms burst produced anything. Clean
+  7-10 ms HIGHs near the end of the capture came while the switch was already
+  reported released, so they do not test rejection. The operator accepts
+  debounce as working. The exact 20 ms boundary was not bracketed, and the
+  operator does not plan to bracket it by hand. The debounce result does not
+  depend on switch polarity.
+- Still not shown for wired GPIO: a macro run by Klipper rather than an edge
+  reported by the simulator.
 - Live shared-button routing, swipes, and end-to-end command counts have not
   been verified. A successful build is not a switch test, and a touch hit is not
   proof that Klipper ran exactly one command.

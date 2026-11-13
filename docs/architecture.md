@@ -28,7 +28,7 @@ configuration, not a separate image. The hardware and pin limits are in
 
 | Part | Owns | Does not own |
 | --- | --- | --- |
-| `KnomiCluster` in the Klipper extra | Shared printer/tool state, coordinated discovery, display registration, `KNOMI_TOOL` and `KNOMI_BUTTON` addressing | A separate copy of shared state per display |
+| `KnomiCluster` in the Klipper extra | Shared printer/tool state, coordinated discovery, display registration, `KNOMI_TOOL` and `KNOMI_BUTTON` addressing, Spoolman spool lookups through Moonraker | A separate copy of shared state per display; Moonraker or Spoolman calls on the reactor thread |
 | Each `knomi_serial` section | Its address, validated configuration, serial connection, button-name table, and status | Other sections' port or tool identity |
 | ESP32-S3 firmware | Rendering, touch/GPIO sampling, button lifecycle, and the configuration it actually adopted | Klipper macro names or printer-wide truth |
 | `knomi_serial` watcher | An identity-to-port map while Klipper cannot answer | Authority to flash a remembered port without rechecking identity |

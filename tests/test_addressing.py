@@ -292,6 +292,16 @@ class FakeSection:
     def get_prefix_options(self, prefix):
         return sorted(key for key in self.values if key.startswith(prefix))
 
+    def getboolean(self, key, default=None):
+        if key not in self.values:
+            return default
+        text = str(self.values[key]).strip().lower()
+        if text in ("1", "true", "yes", "on"):
+            return True
+        if text in ("0", "false", "no", "off"):
+            return False
+        raise self.error(f"{key} must be a boolean")
+
     def getfloat(self, key, default=None, above=None):
         value = float(self.values[key]) if key in self.values else default
         if above is not None and not value > above:
@@ -346,6 +356,36 @@ def test_move_speeds_must_be_positive():
 def test_numeric_tool_must_fit_the_signed_wire_field():
     refuses_section("tool", tool="T2147483648")
     configured(tool="T2147483647")
+
+
+def test_spoolman_is_followed_unless_turned_off():
+    check("default", configured().config_spoolman, True)
+    check("off", configured(spoolman="False").config_spoolman, False)
+    refuses_section("spoolman", spoolman="sometimes")
+
+
+def test_one_moonraker_endpoint_for_the_whole_row():
+    printer = FakePrinter()
+    first = configured(printer, "knomi_serial a", device_id="19aa44")
+    check("default socket", first.cluster.moonraker_endpoint,
+          os.path.expanduser("~/printer_data/comms/moonraker.sock"))
+    configured(printer, "knomi_serial b", device_id="19aa45",
+               moonraker_endpoint="http://localhost:7125")
+    check("set by any section", first.cluster.moonraker_endpoint,
+          "http://localhost:7125")
+    configured(printer, "knomi_serial c", device_id="19aa46",
+               moonraker_endpoint="http://localhost:7125")
+    try:
+        configured(printer, "knomi_serial d", device_id="19aa47",
+                   moonraker_endpoint="/tmp/other.sock")
+    except FakeConfigError as e:
+        for part in ("moonraker_endpoint", "knomi_serial b", "knomi_serial d",
+                     "/tmp/other.sock"):
+            if part not in str(e):
+                raise AssertionError(f"refusal should name {part}: {e}") from None
+    else:
+        raise AssertionError("accepted two different Moonraker endpoints")
+    refuses_section("moonraker_endpoint", moonraker_endpoint="  ")
 
 
 def button(option, definition, **extra):

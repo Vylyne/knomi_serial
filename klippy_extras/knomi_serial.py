@@ -17,8 +17,11 @@ import logging
 import math
 import os
 import re
+import socket
 import struct
+import threading
 import time
+import urllib.request
 import zlib
 
 import serial
@@ -180,6 +183,22 @@ _ACTIVE_PRINT_STATES = ("printing", "paused")
 #: as a hint and never as truth - see port_map.
 _DEVICE_MAP_PATH = os.path.expanduser("~/printer_data/knomi/devices.json")
 _DEVICE_MAP_VERSION = 1
+
+#: Where Moonraker listens on a default install. A path is its Unix socket,
+#: which speaks JSON-RPC with no HTTP framing; an http(s):// URL uses the HTTP
+#: API instead, for a Moonraker that is elsewhere or keeps its socket elsewhere.
+_MOONRAKER_ENDPOINT = "~/printer_data/comms/moonraker.sock"
+#: Ends every JSON-RPC message on Moonraker's Unix socket.
+_ETX = b"\x03"
+#: Longest any one Spoolman lookup may take, connect to answer.
+_SPOOLMAN_TIMEOUT = 3.0
+#: A Moonraker reply bigger than this is not a spool record.
+_SPOOLMAN_REPLY_LIMIT = 1 << 20
+#: A failed lookup is retried this often, this many times, before waiting for
+#: the next spool change or print start. Klipper is usually ready before
+#: Moonraker is listening, so the first lookup after a boot often fails.
+_SPOOLMAN_RETRY_PERIOD = 10.0
+_SPOOLMAN_RETRIES = 6
 
 
 def port_map(path=None):
@@ -658,6 +677,172 @@ def _normalize_tool(value):
     return text or None
 
 
+def spool_variable(tool):
+    """The save_variables name Spoolman's frontends keep a tool's spool in.
+
+    Mainsail and Fluidd save the spool picked for macro `T0` as `t0__spool_id`:
+    the macro name, two underscores, lowercased because save_variables refuses
+    upper case.
+    """
+    return f"t{tool}__spool_id".lower()
+
+
+def parse_spool_id(value):
+    """A saved spool variable as a Spoolman id, or 0 for no spool."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value.strip())
+    if isinstance(value, int) and value > 0:
+        return value
+    return 0
+
+
+def spool_filament(spool):
+    """(colour, material) from a Spoolman spool record. Either may be None.
+
+    A multicolour filament has no `color_hex`, only `multi_color_hexes`; the
+    screen has one colour to show, so it gets the first. Spoolman allows an
+    alpha byte on the end, which the screen has no use for.
+    """
+    filament = spool.get("filament") if isinstance(spool, dict) else None
+    if not isinstance(filament, dict):
+        return None, None
+
+    text = filament.get("color_hex") or ""
+    if not text:
+        text = str(filament.get("multi_color_hexes") or "").split(",")[0]
+    text = str(text).strip().lstrip("#")[:6]
+    color = None
+    if len(text) == 6 and all(char in _HEX_DIGITS for char in text):
+        color = int(text, 16)
+
+    material = str(filament.get("material") or "").strip()
+    return color, material[:_FILAMENT_TYPE_MAX_LEN] or None
+
+
+class MoonrakerError(Exception):
+    """Moonraker answered, and the answer was an error."""
+
+
+def jsonrpc_call(sock, method, params, deadline):
+    """One call on an open Moonraker Unix socket, returning its result.
+
+    Moonraker frames each message with a trailing ETX rather than a length. It
+    may also push notifications down the same socket at any time, so anything
+    that is not the answer to this call is read past rather than mistaken for
+    it.
+    """
+    # Identifying first is what Moonraker's docs ask of a client. Its answer is
+    # read past like any notification, so a Moonraker that does not need it
+    # costs one small message.
+    identify = {
+        "jsonrpc": "2.0",
+        "method": "server.connection.identify",
+        "params": {
+            "client_name": "knomi_serial",
+            "version": _module_version(),
+            "type": "other",
+            "url": "https://github.com/Vylyne/knomi_serial",
+        },
+        "id": 1,
+    }
+    call = {"jsonrpc": "2.0", "method": method, "params": params, "id": 2}
+    for message in (identify, call):
+        sock.sendall(json.dumps(message).encode("utf-8") + _ETX)
+
+    pending = b""
+    while True:
+        while _ETX not in pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"Moonraker did not answer {method}")
+            sock.settimeout(remaining)
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("Moonraker closed the connection")
+            pending += chunk
+            if len(pending) > _SPOOLMAN_REPLY_LIMIT:
+                raise MoonrakerError("Moonraker's reply was too large")
+        frame, _, pending = pending.partition(_ETX)
+        reply = json.loads(frame.decode("utf-8"))
+        if not isinstance(reply, dict) or reply.get("id") != 2:
+            continue
+        if "error" in reply:
+            error = reply["error"]
+            text = error.get("message") if isinstance(error, dict) else error
+            raise MoonrakerError(f"{method}: {text}")
+        return reply.get("result")
+
+
+def _moonraker_socket(path, method, params, timeout):
+    family = getattr(socket, "AF_UNIX", None)
+    if family is None:
+        raise OSError(
+            "this platform has no Unix sockets; give moonraker_endpoint an "
+            "http:// URL instead"
+        )
+    deadline = time.monotonic() + timeout
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(timeout)
+        sock.connect(path)
+        return jsonrpc_call(sock, method, params, deadline)
+    finally:
+        sock.close()
+
+
+def _moonraker_http(url, path, params, timeout):
+    request = urllib.request.Request(
+        url.rstrip("/") + path,
+        data=json.dumps(params).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        body = response.read(_SPOOLMAN_REPLY_LIMIT + 1)
+    if len(body) > _SPOOLMAN_REPLY_LIMIT:
+        raise MoonrakerError("Moonraker's reply was too large")
+    reply = json.loads(body.decode("utf-8"))
+    if not isinstance(reply, dict) or "result" not in reply:
+        raise MoonrakerError(f"{path}: no result in Moonraker's reply")
+    return reply["result"]
+
+
+def moonraker_spool(endpoint, spool_id, timeout=_SPOOLMAN_TIMEOUT):
+    """One spool's Spoolman record, asked of Spoolman through Moonraker.
+
+    Through Moonraker rather than straight to Spoolman because Moonraker
+    already knows where Spoolman is - its `[spoolman]` section is the one
+    place that address is written down. Blocking: never call this on the
+    reactor thread.
+    """
+    params = {
+        "request_method": "GET",
+        "path": f"/v1/spool/{int(spool_id)}",
+        # Separates Spoolman's errors from Moonraker's. A Moonraker too old to
+        # know it ignores it and answers the deprecated way, with Spoolman's
+        # reply - success or error - passed through as it came.
+        "use_v2_response": True,
+    }
+    if endpoint.startswith(("http://", "https://")):
+        result = _moonraker_http(endpoint, "/server/spoolman/proxy", params, timeout)
+    else:
+        result = _moonraker_socket(endpoint, "server.spoolman.proxy", params, timeout)
+
+    if isinstance(result, dict) and set(result) == {"response", "error"}:
+        error = result["error"]
+        if error:
+            text = error.get("message") if isinstance(error, dict) else error
+            raise MoonrakerError(f"Spoolman: {text}")
+        result = result["response"]
+    # Said rather than shown as no colour, so a reply in a shape this does not
+    # expect ends up in klippy.log instead of looking like a colourless spool.
+    if not isinstance(result, dict) or not isinstance(result.get("filament"), dict):
+        raise MoonrakerError(f"Spoolman did not return spool {spool_id}: {result!r}"[:200])
+    return result
+
+
 def _button_error(config, section, option, prop, value, reason):
     shown = "<missing>" if value is None else str(value)
     raise config.error(
@@ -1114,6 +1299,8 @@ class ToolState:
     used: bool = True
     color: int = 0
     type: str = ""
+    #: The Spoolman spool this screen's tool was last seen holding, 0 for none.
+    spool_id: int = 0
 
 
 class KnomiCluster:
@@ -1150,6 +1337,7 @@ class KnomiCluster:
         self.was_printing = False
         self.tram_type = PrinterTramType.NONE
         self.tram_object = None
+        self._init_spoolman()
 
         self.gcode.register_command(
             "KNOMI_TOOL",
@@ -1169,7 +1357,34 @@ class KnomiCluster:
         printer.register_event_handler("klippy:connect", self._handle_connect)
         printer.register_event_handler("klippy:ready", self._handle_ready)
 
+    def _init_spoolman(self):
+        #: Read at klippy:ready. Without it there are no saved spools to follow.
+        self.save_variables = None
+        #: One Moonraker per printer, so one endpoint for the whole row, taken
+        #: from whichever section sets it. Two sections disagreeing is refused
+        #: in register rather than one of them quietly losing.
+        self.moonraker_endpoint = os.path.expanduser(_MOONRAKER_ENDPOINT)
+        self._moonraker_endpoint_from = None
+        #: Set when a print starts, so the next tick looks every spool up again.
+        self._spools_stale = False
+        #: Spool ids with a lookup running, so one spool is asked about once
+        #: however many screens show it.
+        self._spool_pending = set()
+        #: Spool id to (failed attempts, when to try again).
+        self._spool_retry = {}
+
     def register(self, device):
+        endpoint = getattr(device, "config_moonraker_endpoint", None)
+        if endpoint is not None:
+            if self._moonraker_endpoint_from is None:
+                self.moonraker_endpoint = endpoint
+                self._moonraker_endpoint_from = device.name
+            elif endpoint != self.moonraker_endpoint:
+                raise self.printer.config_error(
+                    "knomi_serial: moonraker_endpoint disagrees between "
+                    f"{self._moonraker_endpoint_from} "
+                    f"({self.moonraker_endpoint}) and {device.name} ({endpoint})"
+                )
         self.devices.append(device)
 
     def _handle_connect(self):
@@ -1450,6 +1665,10 @@ class KnomiCluster:
 
         self.tram_type, self.tram_object = select_tram(self.printer)
 
+        # Optional: a printer without [save_variables] has no saved spools, and
+        # its screens take colour from KNOMI_TOOL alone.
+        self.save_variables = self.printer.lookup_object("save_variables", None)
+
         self.reactor.register_timer(self._handle_update, self.reactor.NOW)
         self.reactor.register_timer(self._handle_read, self.reactor.NOW)
 
@@ -1604,6 +1823,13 @@ class KnomiCluster:
 
         self._track_job(self.print_stats.state)
 
+        # Its own guard: a spool that cannot be looked up must not cost every
+        # screen its state for the tick.
+        try:
+            self._track_spools(eventtime)
+        except Exception as e:
+            logging.warning(f"knomi_serial: Spoolman tracking error: {e}")
+
         _, _, lookahead_empty = self.toolhead.check_busy(eventtime)
         if not lookahead_empty:
             self.last_busy = eventtime
@@ -1689,7 +1915,134 @@ class KnomiCluster:
         if self.was_printing and not printing:
             for tool in self.tools.values():
                 tool.used = True
+        if printing and not self.was_printing:
+            # A spool edited in Spoolman since it was loaded is picked up here,
+            # once per job, rather than by asking Spoolman on a timer.
+            self._spools_stale = True
         self.was_printing = printing
+
+    def _spoolman_screens(self):
+        """(device, saved variable name) for every screen that follows Spoolman."""
+        return [
+            (device, spool_variable(device.config_tool))
+            for device in self.devices
+            if getattr(device, "config_spoolman", False)
+            and device.config_tool is not None
+        ]
+
+    def _saved_variables(self, eventtime):
+        variables = getattr(self.save_variables, "allVariables", None)
+        if not isinstance(variables, dict):
+            variables = self.save_variables.get_status(eventtime).get("variables")
+        return variables if isinstance(variables, dict) else {}
+
+    def _track_spools(self, eventtime):
+        """Follow each tool's saved Spoolman spool, looking up what changed.
+
+        The spool id is read from save_variables every tick - an in-memory dict
+        lookup, which Klipper refreshes on every SAVE_VARIABLE - and Spoolman is
+        only asked when it changes, at startup (the first tick sees every spool
+        as new), and when a print starts.
+
+        A tool whose spool is cleared goes back to unknown. A tool that never
+        had one is left alone, so a printer using KNOMI_TOOL for some tools and
+        Spoolman for others does not have the first set wiped at startup.
+        """
+        stale, self._spools_stale = self._spools_stale, False
+        if self.save_variables is None:
+            return
+        screens = self._spoolman_screens()
+        if not screens:
+            return
+        variables = self._saved_variables(eventtime)
+
+        wanted = set()
+        current = set()
+        for device, name in screens:
+            state = self.tool_state(device.screen_name)
+            spool = parse_spool_id(variables.get(name))
+            if spool:
+                current.add(spool)
+            if spool == state.spool_id:
+                if spool and stale:
+                    wanted.add(spool)
+                continue
+            state.spool_id = spool
+            if spool:
+                wanted.add(spool)
+            else:
+                state.color = 0
+                state.type = ""
+
+        # A retry is for a spool still loaded somewhere; one that has been
+        # unloaded since is forgotten rather than asked about.
+        for spool, (_, due) in list(self._spool_retry.items()):
+            if spool not in current:
+                del self._spool_retry[spool]
+            elif eventtime >= due:
+                wanted.add(spool)
+
+        for spool in sorted(wanted):
+            self._lookup_spool(spool)
+
+    def _lookup_spool(self, spool):
+        if spool in self._spool_pending:
+            return
+        self._spool_pending.add(spool)
+        endpoint = self.moonraker_endpoint
+
+        def work():
+            record, error = None, None
+            try:
+                record = self._fetch_spool(endpoint, spool)
+            except Exception as e:
+                error = e
+            # Back onto the reactor thread, which owns every ToolState.
+            self.reactor.register_async_callback(
+                lambda eventtime: self._spool_fetched(spool, record, error, eventtime)
+            )
+
+        self._start_lookup(work)
+
+    def _fetch_spool(self, endpoint, spool):
+        return moonraker_spool(endpoint, spool)
+
+    def _start_lookup(self, work):
+        # A thread because the lookup blocks on a socket, and this is called
+        # from the reactor thread that feeds the MCUs their step queues.
+        threading.Thread(target=work, name="knomi_spoolman", daemon=True).start()
+
+    def _spool_fetched(self, spool, record, error, eventtime):
+        self._spool_pending.discard(spool)
+        if error is not None:
+            attempts = self._spool_retry.get(spool, (0, 0))[0] + 1
+            if attempts < _SPOOLMAN_RETRIES:
+                if attempts == 1:
+                    logging.warning(
+                        "knomi_serial: Spoolman lookup of spool %d failed, "
+                        "retrying: %s", spool, error)
+                self._spool_retry[spool] = (
+                    attempts, eventtime + _SPOOLMAN_RETRY_PERIOD)
+            else:
+                logging.warning(
+                    "knomi_serial: Spoolman lookup of spool %d failed %d times, "
+                    "waiting for the next spool change or print: %s",
+                    spool, attempts, error)
+                self._spool_retry.pop(spool, None)
+            return
+
+        self._spool_retry.pop(spool, None)
+        color, material = spool_filament(record)
+        for device, _ in self._spoolman_screens():
+            state = self.tools.get(device.screen_name)
+            # Only screens still on this spool. One swapped while the lookup
+            # was out has a newer lookup of its own coming.
+            if state is None or state.spool_id != spool:
+                continue
+            if color is not None:
+                state.color = color
+            if material is not None:
+                state.type = material
 
     cmd_KNOMI_TOOL_help = (
         "Tell a screen what is loaded and whether the job uses it. KNOMI_TOOL "
@@ -1790,6 +2143,7 @@ class KnomiCluster:
                     "used": state.used,
                     "filament_color": f"{state.color:06X}" if state.color else None,
                     "filament_type": state.type or None,
+                    "spool_id": state.spool_id or None,
                 }
                 for screen, state in self.tools.items()
             },
@@ -1870,6 +2224,21 @@ class Knomi_Serial:
                     f"{self.name}: tool '{self.config_tool}' exceeds the "
                     "signed 32-bit protocol field"
                 )
+
+        # Follow the Spoolman spool saved for this screen's tool. Harmless where
+        # there is none: nothing is asked of Moonraker until a spool is saved.
+        self.config_spoolman = config.getboolean("spoolman", True)
+        endpoint = config.get("moonraker_endpoint", None)
+        if endpoint is not None:
+            endpoint = endpoint.strip()
+            if not endpoint:
+                raise config.error(
+                    f"{self.name}: moonraker_endpoint '' must be Moonraker's "
+                    "socket path or an http:// URL"
+                )
+            if not endpoint.startswith(("http://", "https://")):
+                endpoint = os.path.expanduser(endpoint)
+        self.config_moonraker_endpoint = endpoint
 
         self.config_hotend = config.get("heater_hotend", None)
         self.config_bed = config.get("heater_bed", None)
@@ -2493,6 +2862,7 @@ class Knomi_Serial:
             "used": tool.used,
             "filament_color": f"{tool.color:06X}" if tool.color else None,
             "filament_type": tool.type or None,
+            "spool_id": tool.spool_id or None,
             # Device side. All None until the device reports in.
             "device_online": online,
             "report_age": age,

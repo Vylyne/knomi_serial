@@ -121,6 +121,15 @@ display ID, and the action observed for each run.
   removal of the old pull-up/binding after config replacement. Repeat with a
   harmless macro or observe profile to check one event per lifecycle.
 
+- [ ] **Spoolman:** With Spoolman configured in Moonraker and the default
+  `moonraker_endpoint`, pick a spool for a tool in Mainsail or Fluidd. Confirm
+  that tool's screen takes the spool's colour and material within a second,
+  and `spool_id` in its status matches. Restart Klipper and confirm the colour
+  returns without a print; restart the host and confirm a failed first lookup
+  recovers once Moonraker is up. Clear the spool and confirm the screen goes
+  back to unknown. Edit the spool's colour in Spoolman, start a print, and
+  confirm the new colour shows. Check `klippy.log` for lookup failures.
+
 Direct screenshot or flashing tools must not contend with Klipper or the
 watcher for the port. Stop the owning service before opening it directly, and
 reconfirm the display ID before a write; see [mcu-updater.md](mcu-updater.md)

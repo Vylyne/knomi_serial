@@ -82,6 +82,8 @@ and [hardware notes](docs/hardware.md) carry their respective technical details.
   and touchscreen corner controls.
 - [ ] Named touch and host-forwarded button inputs with page, macro, and
   observation actions (implemented; live interaction validation pending).
+- [ ] Filament colour and material from the Spoolman spool saved for each tool
+  (implemented; live Moonraker validation pending).
 - [x] Home and Move layouts captured on a live Knomi panel; their touch
   controls checked on the panel.
 - [x] Link-health, firmware, protocol, configuration, and device status exposed
@@ -97,6 +99,8 @@ and [hardware notes](docs/hardware.md) carry their respective technical details.
   with Klipper; script-driven display captures do not exercise either host path.
 - [ ] Verify corner switches wired directly to display GPIO, including
   debounce and config replacement; see [the live checklist](docs/verification.md).
+- [ ] Verify Spoolman lookups through Moonraker's Unix socket on a live
+  printer; see [the live checklist](docs/verification.md).
 
 ## Using it
 
@@ -268,6 +272,12 @@ speed_y: 100
 speed_z: 100
 
 gcodes:  # Comma separated G-Codes to show on the G-code page.
+
+spoolman: True  # Take this screen's filament colour and material from the
+                # Spoolman spool saved for its tool. See "From Spoolman" below.
+moonraker_endpoint: ~/printer_data/comms/moonraker.sock
+                # Where to ask Moonraker: its Unix socket, or an http:// URL.
+                # One Moonraker per printer, so sections that set it must agree.
 ```
 
 ### Which display is which
@@ -554,6 +564,31 @@ KNOMI_TOOL TOOL=4 USED=1 COLOR=FF0000 TYPE=ABS
 KNOMI_TOOL COLOR=9572BF TYPE=ABS
 ```
 
+### From Spoolman
+
+With Spoolman connected to Moonraker, a screen with a `tool:` follows the spool
+Mainsail or Fluidd saved for that tool, and needs no `COLOR=` or `TYPE=`. Those
+frontends save the spool picked for macro `T0` as `t0__spool_id` in
+`[save_variables]`; the screen with `tool: 0` reads that, and asks Spoolman for
+the spool's colour and material through Moonraker.
+
+- Spoolman is asked when a tool's saved spool changes, once when Klipper starts,
+  and once when a print starts - so a colour edited in Spoolman shows from the
+  next print. Nothing is asked on a timer.
+- A cleared spool sets the screen back to unknown. A tool that never had a spool
+  saved is left alone, so `KNOMI_TOOL` still drives tools Spoolman does not.
+- `KNOMI_TOOL COLOR=` and `TYPE=` still work, and hold until the next lookup
+  replaces them. A spool with no colour or material in Spoolman leaves the
+  current one in place.
+- Drop `COLOR=` and `TYPE=` from the print-start `KNOMI_TOOL` for tools Spoolman
+  tracks, and keep only `USED=`. The print-start lookup and the slicer's colour
+  race each other, so with both the screen may show either one for the job.
+- A failed lookup keeps the current colour, is retried every 10 seconds up to
+  six times - Klipper is usually ready before Moonraker is listening - and then
+  waits for the next spool change or print. Failures go to `klippy.log`.
+- `spoolman: False` turns this off for one screen. A screen with no `tool:` has
+  no saved spool to follow and uses `KNOMI_TOOL` alone.
+
 `USED` returns to true for every tool when a print ends, so the next job starts
 clean, and it defaults to true on startup — a module restart mid-print must not
 black out every screen. Filament colour and type deliberately survive a print
@@ -599,6 +634,7 @@ and to the Moonraker API as `printer["knomi_serial T0_knomi"]` (or
 | `used` | Whether the running job uses this tool. |
 | `filament_color` | Loaded filament colour as `RRGGBB`, or `None`. |
 | `filament_type` | Loaded material name, or `None`. |
+| `spool_id` | Spoolman spool saved for this screen's tool, or `None`. |
 | `device_online` | Device has reported within the last 10 seconds. |
 | `report_age` | Seconds since the last report, or `None`. |
 | `firmware_version` | Version actually flashed on the device. |
